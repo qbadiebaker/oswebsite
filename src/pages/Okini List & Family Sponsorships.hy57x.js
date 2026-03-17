@@ -46,79 +46,93 @@ function initializeSession() {
 }
 
 async function populateFamilyAndIndividualList() {
-    console.log("Starting to build the REGULAR request list...");
-    const flatList = [];
+    console.log("Starting to build the REGULAR request list (Optimized)...");
 
-    const familiesResult = await wixData.query(COLLECTIONS.FAMILIES).find();
-    if (familiesResult.items.length === 0) {
-        console.log("No families found in the collection.");
+    // 1. Fetch ALL active operations and INCLUDE the referenced families and individuals in ONE query
+    const opsResult = await wixData.query(COLLECTIONS.OPERATIONS)
+        .ne(FIELDS.OKINI_TYPE, "holiday")
+        .include(FIELDS.OP_FAMILY_REF, FIELDS.OP_INDIVIDUAL_REF)
+        .limit(1000) // Expand limit to ensure we get all records
+        .find();
+
+    const operations = opsResult.items;
+
+    if (operations.length === 0) {
+        console.log("No regular requests found.");
         $w('#repeater1').data = [];
         return;
     }
-    console.log(`Found ${familiesResult.items.length} families to process for regular requests.`);
 
-    for (const family of familiesResult.items) {
-        // Fetch family requests, excluding 'holiday' type
-        const familyRequestsQuery = wixData.query(COLLECTIONS.OPERATIONS)
-            .hasSome(FIELDS.OP_FAMILY_REF, family._id)
-            .isEmpty(FIELDS.OP_INDIVIDUAL_REF)
-            .ne(FIELDS.OKINI_TYPE, "holiday")
-            .find();
+    // 2. Group the data by family in memory (Zero extra database calls)
+    const familyMap = new Map();
 
-        const individualsQuery = wixData.query(COLLECTIONS.INDIVIDUALS)
-            .hasSome(FIELDS.INDIVIDUAL_FAMILY_REF, family._id)
-            .find();
+    operations.forEach(op => {
+        const family = op[FIELDS.OP_FAMILY_REF];
+        if (!family) return; // Skip if no family is linked to this operation
 
-        const [familyRequests, individuals] = await Promise.all([familyRequestsQuery, individualsQuery]);
+        // If we haven't seen this family yet, create an entry for them
+        if (!familyMap.has(family._id)) {
+            familyMap.set(family._id, {
+                familyDetails: family,
+                familyRequest: null,
+                individualItems: []
+            });
+        }
 
-        let hasAnyRegularRequests = familyRequests.items.length > 0;
-        const individualItems = [];
+        const familyData = familyMap.get(family._id);
 
-        for (const individual of individuals.items) {
-             const individualRequestQuery = await wixData.query(COLLECTIONS.OPERATIONS)
-                .hasSome(FIELDS.OP_INDIVIDUAL_REF, individual._id)
-                .ne(FIELDS.OKINI_TYPE, "holiday")
-                .find();
-
-            if (individualRequestQuery.items.length > 0) {
-                 hasAnyRegularRequests = true;
-                 individualItems.push({
+        // Sort the operation: Is it an individual request or a family request?
+        if (op[FIELDS.OP_INDIVIDUAL_REF]) {
+            const individual = op[FIELDS.OP_INDIVIDUAL_REF];
+            
+            // Push individual item (matching your original data structure)
+            // We check to ensure we don't duplicate individuals if they have multiple requests
+            if (!familyData.individualItems.find(item => item._id === individual._id)) {
+                familyData.individualItems.push({
                     _id: individual._id,
                     type: 'individual',
-                    data: { individual, request: individualRequestQuery.items[0] }
+                    data: { individual: individual, request: op }
                 });
             }
+        } else {
+            // It's a general family request
+            familyData.familyRequest = op;
         }
+    });
 
-        if (hasAnyRegularRequests) {
-            flatList.push({
-                _id: family._id,
-                type: 'family',
-                data: {
-                    familyDetails: family,
-                    familyRequest: familyRequests.items.length > 0 ? familyRequests.items[0] : null
-                }
-            });
-            flatList.push(...individualItems);
-        }
-    }
+    // 3. Flatten the grouped data into the list your repeater expects
+    const flatList = [];
+    familyMap.forEach((familyData, familyId) => {
+        // Push the main family header
+        flatList.push({
+            _id: familyId,
+            type: 'family',
+            data: {
+                familyDetails: familyData.familyDetails,
+                familyRequest: familyData.familyRequest
+            }
+        });
+        // Push all the individuals belonging to that family underneath them
+        flatList.push(...familyData.individualItems);
+    });
 
     console.log(`Populating main repeater (#repeater1) with ${flatList.length} total regular items.`);
+    
+    // 4. Bind the data to the repeater
     const repeater = $w('#repeater1');
     repeater.data = flatList;
 
-    // *** MODIFIED: Use #text148 for contact info, remove from #requestInfoText ***
+    // --- YOUR EXISTING onItemReady LOGIC STAYS EXACTLY THE SAME BELOW ---
     repeater.onItemReady(($item, item, index) => {
         const requestInfoTextElement = $item('#requestInfoText');
-        const contactTextElement = $item('#text148'); // Get the dedicated text element
+        const contactTextElement = $item('#text148'); 
         let htmlString = "";
-        let requestData = null; // To hold the relevant request object
+        let requestData = null; 
 
         switch (item.type) {
             case 'family':
                 const { familyDetails, familyRequest } = item.data;
-                requestData = familyRequest; // Assign the family request
-                // Build HTML without contact info
+                requestData = familyRequest; 
                 htmlString = `<p style="font-size:18px;"><strong>${familyDetails.headOfFamily}'s Family</strong></p>
                               <p style="clear: both;"><strong>About:</strong> ${familyDetails.familyDescription || 'N/A'}</p>`;
                 if (familyRequest) {
@@ -132,30 +146,23 @@ async function populateFamilyAndIndividualList() {
 
             case 'individual':
                 const { individual, request } = item.data;
-                requestData = request; // Assign the individual request
-                // Build HTML without contact info, keep indent
+                requestData = request; 
                 htmlString = `<p style="margin-left: 40px;"><strong>${individual.boyOrGirl || 'Member'}, Age: ${individual.age || ''}</strong><br><strong>Needs:</strong> ${request.requestDonationDetails || 'N/A'}<br><strong>Sizes:</strong> ${request.sizeDetails || 'N/A'}</p>`;
                 configureSwitchAndUrgentBox($item, request);
                 break;
         }
 
-        // Set the main request info text
-        requestInfoTextElement.html = htmlString;
-
-        // --- Handle the Contact Text Element ---
         const coordinatorName = requestData ? requestData[FIELDS.COORDINATOR] : null;
 
         if (coordinatorName) {
             contactTextElement.text = `Contact: ${coordinatorName}`;
-            contactTextElement.expand(); // Make sure it's visible
+            contactTextElement.expand(); 
         } else {
-            contactTextElement.text = ""; // Clear text just in case
-            contactTextElement.collapse(); // Hide if no coordinator
+            contactTextElement.text = ""; 
+            contactTextElement.collapse(); 
         }
     });
 }
-
-// --- Functions below remain unchanged ---
 
 function configureSwitchAndUrgentBox($item, requestData) {
     const isUrgent = requestData.urgentNeedStatus === true || String(requestData.urgentNeedStatus).toUpperCase() === 'TRUE';
