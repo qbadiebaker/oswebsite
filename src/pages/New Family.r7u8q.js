@@ -1,0 +1,70 @@
+import wixLocationFrontend from 'wix-location-frontend';
+import wixData from 'wix-data'; // We don't use this directly here, but it's good practice to import.
+
+// This function runs as soon as the page is ready.
+$w.onReady(function () {
+    // --- Task 1: Generate a new unique Donor ID ---
+    generateUniqueFamilyId();
+
+    // --- Task 2: Handle the save button click ---
+    setupSaveAndNavigate();
+});
+
+
+/**
+ * Generates a unique, human-readable ID and places it in the donorIdInput field.
+ * The ID is based on a prefix 'D-' followed by the current timestamp.
+ * It also disables the input field so the user cannot change the generated ID.
+ */
+function generateUniqueFamilyId() {
+    // Create a unique ID using a prefix and the current date/time in milliseconds.
+    const uniqueId = 'idfam-' + Date.now(); 
+    
+    // Set the value of the input field to our new ID.
+    $w('#familyIdInput').value = uniqueId;
+    
+    // Disable the input field to prevent the user from editing it.
+    $w('#familyIdInput').disable();
+}
+
+
+/**
+ * Sets up the onClick event for the saveButton.
+ * This function manually saves the dataset and then navigates to the new item's dynamic page.
+ */
+function setupSaveAndNavigate() {
+    $w('#saveButton').onClick(async () => {
+        // Disable the button immediately to prevent double-clicks.
+        $w('#saveButton').disable();
+        $w('#saveButton').label = "Submitting..."; // Provide user feedback.
+
+        try {
+            // The .save() function saves the new item to the collection
+            // and returns a promise that resolves with the saved item.
+            const savedItem = await $w('#dataset1').save();
+            
+            // The 'savedItem' object contains all the new family's data,
+            // including the auto-generated link to their dynamic item page.
+            
+            // The field key for the dynamic page URL is typically 'link-collectionName-titleField'.
+            // Replace 'name' if your dynamic page URL uses a different field (like the Family ID).
+            const dynamicPageUrl = savedItem['link-families-familyId']; 
+
+            if (dynamicPageUrl) {
+                // If the URL exists, navigate the user to it.
+                wixLocationFrontend.to(dynamicPageUrl);
+            } else {
+                // This is a fallback in case something is wrong with the dynamic page setup.
+                console.error("Could not find the dynamic page URL for the new family.");
+                $w('#saveButton').label = "Error! Could not navigate.";
+            }
+
+        } catch (error) {
+            // If the save operation fails (e.g., a required field is empty).
+            console.error("Error saving family:", error);
+            $w('#saveButton').label = "Save Failed. Try Again.";
+            // Re-enable the button so the user can correct the error and try again.
+            $w('#saveButton').enable();
+        }
+    });
+}
