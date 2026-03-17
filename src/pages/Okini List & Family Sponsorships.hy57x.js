@@ -46,122 +46,135 @@ function initializeSession() {
 }
 
 async function populateFamilyAndIndividualList() {
-    console.log("Starting to build the REGULAR request list (Optimized)...");
+    console.log("Starting to build the REGULAR request list (Memory Match)...");
 
-    // 1. Fetch ALL active operations and INCLUDE the referenced families and individuals in ONE query
-    const opsResult = await wixData.query(COLLECTIONS.OPERATIONS)
-        .ne(FIELDS.OKINI_TYPE, "holiday")
-        .include(FIELDS.OP_FAMILY_REF, FIELDS.OP_INDIVIDUAL_REF)
-        .limit(1000) // Expand limit to ensure we get all records
-        .find();
+    try {
+        // 1. Fetch all relevant data concurrently (Limits ensure we get enough items)
+        const [opsResult, familiesResult, individualsResult] = await Promise.all([
+            wixData.query(COLLECTIONS.OPERATIONS).ne(FIELDS.OKINI_TYPE, "holiday").limit(1000).find(),
+            wixData.query(COLLECTIONS.FAMILIES).limit(1000).find(),
+            wixData.query(COLLECTIONS.INDIVIDUALS).limit(1000).find()
+        ]);
 
-    const operations = opsResult.items;
+        const operations = opsResult.items;
+        const families = familiesResult.items;
+        const individuals = individualsResult.items;
 
-    if (operations.length === 0) {
-        console.log("No regular requests found.");
-        $w('#repeater1').data = [];
-        return;
-    }
-
-    // 2. Group the data by family in memory (Zero extra database calls)
-    const familyMap = new Map();
-
-    operations.forEach(op => {
-        const family = op[FIELDS.OP_FAMILY_REF];
-        if (!family) return; // Skip if no family is linked to this operation
-
-        // If we haven't seen this family yet, create an entry for them
-        if (!familyMap.has(family._id)) {
-            familyMap.set(family._id, {
-                familyDetails: family,
-                familyRequest: null,
-                individualItems: []
-            });
+        if (families.length === 0) {
+            console.log("No families found.");
+            $w('#repeater1').data = [];
+            return;
         }
 
-        const familyData = familyMap.get(family._id);
+        const flatList = [];
 
-        // Sort the operation: Is it an individual request or a family request?
-        if (op[FIELDS.OP_INDIVIDUAL_REF]) {
-            const individual = op[FIELDS.OP_INDIVIDUAL_REF];
+        // Helper function: Safely checks if a database field matches an ID
+        // (Handles both single strings and arrays of strings)
+        const matchesId = (fieldValue, targetId) => {
+            if (!fieldValue) return false;
+            if (Array.isArray(fieldValue)) return fieldValue.includes(targetId);
+            return fieldValue === targetId;
+        };
+
+        // 2. Loop through families and match up the requests locally
+        for (const family of families) {
             
-            // Push individual item (matching your original data structure)
-            // We check to ensure we don't duplicate individuals if they have multiple requests
-            if (!familyData.individualItems.find(item => item._id === individual._id)) {
-                familyData.individualItems.push({
-                    _id: individual._id,
-                    type: 'individual',
-                    data: { individual: individual, request: op }
-                });
-            }
-        } else {
-            // It's a general family request
-            familyData.familyRequest = op;
-        }
-    });
+            // Find operations linked to this family that DO NOT have an individual linked
+            const familyRequests = operations.filter(op => {
+                const matchesFam = matchesId(op[FIELDS.OP_FAMILY_REF], family._id);
+                const indRef = op[FIELDS.OP_INDIVIDUAL_REF];
+                const isEmptyInd = !indRef || (Array.isArray(indRef) && indRef.length === 0);
+                return matchesFam && isEmptyInd;
+            });
 
-    // 3. Flatten the grouped data into the list your repeater expects
-    const flatList = [];
-    familyMap.forEach((familyData, familyId) => {
-        // Push the main family header
-        flatList.push({
-            _id: familyId,
-            type: 'family',
-            data: {
-                familyDetails: familyData.familyDetails,
-                familyRequest: familyData.familyRequest
+            // Find individuals belonging to this family
+            const familyIndividuals = individuals.filter(ind => 
+                matchesId(ind[FIELDS.INDIVIDUAL_FAMILY_REF], family._id)
+            );
+
+            let hasAnyRegularRequests = familyRequests.length > 0;
+            const individualItems = [];
+
+            // Check operations for each individual
+            for (const individual of familyIndividuals) {
+                const indRequests = operations.filter(op => 
+                    matchesId(op[FIELDS.OP_INDIVIDUAL_REF], individual._id)
+                );
+
+                if (indRequests.length > 0) {
+                    hasAnyRegularRequests = true;
+                    individualItems.push({
+                        _id: individual._id,
+                        type: 'individual',
+                        data: { individual: individual, request: indRequests[0] }
+                    });
+                }
+            }
+
+            // Only push to repeater if there is an active request
+            if (hasAnyRegularRequests) {
+                flatList.push({
+                    _id: family._id,
+                    type: 'family',
+                    data: {
+                        familyDetails: family,
+                        familyRequest: familyRequests.length > 0 ? familyRequests[0] : null
+                    }
+                });
+                flatList.push(...individualItems);
+            }
+        }
+
+        console.log(`Populating main repeater (#repeater1) with ${flatList.length} total regular items.`);
+        const repeater = $w('#repeater1');
+        repeater.data = flatList;
+
+        // --- Handle UI elements inside Repeater 1 ---
+        repeater.onItemReady(($item, item, index) => {
+            const requestInfoTextElement = $item('#requestInfoText');
+            const contactTextElement = $item('#text148'); 
+            let htmlString = "";
+            let requestData = null; 
+
+            switch (item.type) {
+                case 'family':
+                    const { familyDetails, familyRequest } = item.data;
+                    requestData = familyRequest; 
+                    
+                    htmlString = `<p style="font-size:18px;"><strong>${familyDetails.headOfFamily || 'Family'}'s Family</strong></p>
+                                  <p style="clear: both;"><strong>About:</strong> ${familyDetails.familyDescription || 'N/A'}</p>`;
+                    if (familyRequest) {
+                        htmlString += `<p style="margin-left: 20px;"><strong>Family Need:</strong> ${familyRequest.requestDonationDetails || 'N/A'}</p>`;
+                        configureSwitchAndUrgentBox($item, familyRequest);
+                    } else {
+                        $item('#switch1').collapse();
+                        $item('#box172').collapse();
+                    }
+                    break;
+
+                case 'individual':
+                    const { individual, request } = item.data;
+                    requestData = request; 
+                    
+                    htmlString = `<p style="margin-left: 40px;"><strong>${individual.boyOrGirl || 'Member'}, Age: ${individual.age || ''}</strong><br><strong>Needs:</strong> ${request.requestDonationDetails || 'N/A'}<br><strong>Sizes:</strong> ${request.sizeDetails || 'N/A'}</p>`;
+                    configureSwitchAndUrgentBox($item, request);
+                    break;
+            }
+
+            const coordinatorName = requestData ? requestData[FIELDS.COORDINATOR] : null;
+
+            if (coordinatorName) {
+                contactTextElement.text = `Contact: ${coordinatorName}`;
+                contactTextElement.expand(); 
+            } else {
+                contactTextElement.text = ""; 
+                contactTextElement.collapse(); 
             }
         });
-        // Push all the individuals belonging to that family underneath them
-        flatList.push(...familyData.individualItems);
-    });
 
-    console.log(`Populating main repeater (#repeater1) with ${flatList.length} total regular items.`);
-    
-    // 4. Bind the data to the repeater
-    const repeater = $w('#repeater1');
-    repeater.data = flatList;
-
-    // --- YOUR EXISTING onItemReady LOGIC STAYS EXACTLY THE SAME BELOW ---
-    repeater.onItemReady(($item, item, index) => {
-        const requestInfoTextElement = $item('#requestInfoText');
-        const contactTextElement = $item('#text148'); 
-        let htmlString = "";
-        let requestData = null; 
-
-        switch (item.type) {
-            case 'family':
-                const { familyDetails, familyRequest } = item.data;
-                requestData = familyRequest; 
-                htmlString = `<p style="font-size:18px;"><strong>${familyDetails.headOfFamily}'s Family</strong></p>
-                              <p style="clear: both;"><strong>About:</strong> ${familyDetails.familyDescription || 'N/A'}</p>`;
-                if (familyRequest) {
-                    htmlString += `<p style="margin-left: 20px;"><strong>Family Need:</strong> ${familyRequest.requestDonationDetails || 'N/A'}</p>`;
-                    configureSwitchAndUrgentBox($item, familyRequest);
-                } else {
-                    $item('#switch1').collapse();
-                    $item('#box172').collapse();
-                }
-                break;
-
-            case 'individual':
-                const { individual, request } = item.data;
-                requestData = request; 
-                htmlString = `<p style="margin-left: 40px;"><strong>${individual.boyOrGirl || 'Member'}, Age: ${individual.age || ''}</strong><br><strong>Needs:</strong> ${request.requestDonationDetails || 'N/A'}<br><strong>Sizes:</strong> ${request.sizeDetails || 'N/A'}</p>`;
-                configureSwitchAndUrgentBox($item, request);
-                break;
-        }
-
-        const coordinatorName = requestData ? requestData[FIELDS.COORDINATOR] : null;
-
-        if (coordinatorName) {
-            contactTextElement.text = `Contact: ${coordinatorName}`;
-            contactTextElement.expand(); 
-        } else {
-            contactTextElement.text = ""; 
-            contactTextElement.collapse(); 
-        }
-    });
+    } catch (err) {
+        console.error("Error populating request list:", err);
+    }
 }
 
 function configureSwitchAndUrgentBox($item, requestData) {
@@ -212,10 +225,8 @@ function setupCheckoutForm() {
     // $w('#input3').onInput(validateCheckoutForm); 
 
     // --- FIX 3: Run validation once on page load ---
-    // This sets the initial state (which will be disabled)
     validateCheckoutForm();
 
-    // Your existing onClick logic stays the same
     submitButton.onClick(async () => {
         submitButton.disable();
         submitButton.label = "Processing...";
@@ -230,8 +241,6 @@ function setupCheckoutForm() {
             submitButton.label = "Error - Please Try Again";
             // Re-enable button on error
             submitButton.enable(); 
-            // OR better, re-run validation
-            // validateCheckoutForm();
         }
     });
 }
@@ -241,11 +250,8 @@ function setupCheckoutForm() {
  */
 function validateCheckoutForm() {
     // Assumes #input1 (Email) and #input3 (Name) are set as 'Required' in the Editor.
-    // If you also want the phone (#input2) to be required, add '&& $w('#input2').valid'
     const isDonorInfoValid = $w('#input1').valid && $w('#checkboxGroup1').valid;
 
-
-    // Enable button ONLY if both conditions are true
     if (isDonorInfoValid) {
         $w('#button20').enable();
     } else {
