@@ -1,125 +1,149 @@
 import wixData from 'wix-data';
 
-// Keep track of the family we want to link (whether existing or freshly created)
 let selectedFamily = null; 
 
 $w.onReady(function () {
 
+    $w('#linkedFamilyRepeater').collapse(); 
+
     // ==========================================
-    // 1. SEARCH EXISTING FAMILIES
+    // 1. DIRECT QUERY: SEARCH EXISTING FAMILIES
     // ==========================================
-    $w('#input3').onInput(() => {
+    $w('#input3').onInput(async () => {
         let keyword = $w('#input3').value;
-        $w('#existingFamiliesDataset').setFilter(
-            wixData.filter().contains('headOfFamily', keyword)
-            // Note: You can chain .or().contains() if you want to search by other fields
-        );
+        
+        // Only search if they've typed at least 2 characters to save loading time
+        if (keyword.length > 1) {
+            try {
+                let results = await wixData.query('Import4') // Families collection
+                    .contains('headOfFamily', keyword)
+                    .limit(5) // Strictly limits the table to 5 rows
+                    .find();
+                
+                $w('#familySearchTable').rows = results.items;
+            } catch (error) {
+                console.error("Search failed:", error);
+            }
+        } else {
+            $w('#familySearchTable').rows = []; // Clears table if input is empty
+        }
     });
 
     // ==========================================
-    // 2. UI TOGGLES (Add Existing vs Add New)
+    // 2. UI TOGGLES
     // ==========================================
     $w('#addExistingFamily').onClick(() => {
         $w('#familySearchTable').expand();
-        $w('#box248').collapse(); // Hide the new family form
+        $w('#box248').collapse(); 
     });
 
     $w('#addNewFamily').onClick(() => {
         $w('#box248').expand();
-        $w('#familySearchTable').collapse(); // Hide the search table
-    });
-
-    // ==========================================
-    // 3. LINK AN EXISTING FAMILY
-    // ==========================================
-    $w('#familySearchTable').onRowSelect((event) => {
-        selectedFamily = event.rowData; // Grab the data of the clicked row
-        updateRepeaterUI();
         $w('#familySearchTable').collapse(); 
     });
 
     // ==========================================
-    // 4. REMOVE LINKED FAMILY
+    // 3. LINK EXISTING / REMOVE LINK
     // ==========================================
+    $w('#familySearchTable').onRowSelect((event) => {
+        selectedFamily = event.rowData; 
+        updateRepeaterUI();
+        $w('#familySearchTable').collapse(); 
+    });
+
     $w('#removeLinkedFamilyButton').onClick(() => {
         selectedFamily = null;
         updateRepeaterUI();
     });
 
     // ==========================================
-    // 5. SAVE & LINK A NEW FAMILY (Inside Box 248)
+    // 4. SAVE & LINK A NEW FAMILY
     // ==========================================
     $w('#saveButton').onClick(async () => {
-        // Construct the new family object
-        // NOTE: Replace the right-side values with your actual input IDs inside box248
+        let newFamId = "idfam-" + Date.now();
+
         let newFamilyData = {
+            familyId: newFamId, 
             headOfFamily: $w('#headOffamilyInput').value, 
             familyDescription: $w('#familyDescriptionInput').value,
             staffNotes: $w('#staffNotes').value,
             primaryMailingAddress: $w('#primaryMailingAddressInput').value,
             phone: $w('#phone').value,
             directionsPhysicalLocation: $w('#directionsOrPhysAddress').value,
-            email: $w('#email').value,
-            // Add any other fields you need here
+            email: $w('#email').value
         };
 
         try {
-            // Insert into the Families collection (Change 'Import4' to actual collection ID if different)
             let insertedFamily = await wixData.insert('Import4', newFamilyData); 
-            
-            selectedFamily = insertedFamily; // Set as the currently selected family
+            selectedFamily = insertedFamily; 
             updateRepeaterUI();
-            
-            $w('#box248').collapse(); // Hide the form upon success
+            $w('#box248').collapse(); 
         } catch (error) {
             console.error("Failed to create new family:", error);
         }
     });
 
     // ==========================================
-    // 6. FINAL SAVE: CREATE OPERATION & ESTABLISH LINK
+    // 5. FINAL SAVE: MULTI-REFERENCE LINKING & CONFIRMATION
     // ==========================================
     $w('#button28').onClick(async () => {
-        // Validate that an operation description exists
         if (!$w('#input2').value) return console.error("Req title is required");
 
+        // Change button state to indicate processing
+        $w('#button28').disable();
+        $w('#button28').label = "Saving...";
+
+        // Formats exactly to YYYY-MM-DD (Requires field type to be 'Text' in CMS)
+        let dateString = new Date().toISOString().split('T')[0];
+
+        let newOpId = "OP-" + Date.now();
+
         let newOperationData = {
-            requestDonationDetails: $w('#input2').value, // Req title
-            forWho: $w('#input5').value,                 // For Who?
-            requestNotes: $w('#input1').value,           // Req description
-            operationType: "Request",                    // Defaulting operation type
-            dateRequested: new Date()
+            operationId: newOpId, 
+            requestDonationDetails: $w('#input2').value, 
+            forWho: $w('#input5').value,                 
+            requestNotes: $w('#input1').value,           
+            operationType: "Request",                    
+            dateRequested: dateString, 
+            whichOkini: $w('#dropdown1').value,
+            coordinator: $w('#dropdown2').value,
+            liveOnWebsite: $w('#switch1').checked, 
+            urgentNeedStatus: $w('#urgentNeedStatus').checked 
         };
 
-        // If 'linkedFamily' is a standard Reference Field, you can attach it directly upon insert:
-        if (selectedFamily) {
-             newOperationData.linkedFamily = selectedFamily._id; 
-        }
-
         try {
-            // Insert into Operations collection ('Import3')
+            // 1. Insert the Operation first
             let insertedOp = await wixData.insert('Import3', newOperationData);
-
+            
+            // 2. Insert the Multi-Reference Link (if a family is selected)
             if (selectedFamily) {
                 await wixData.insertReference('Import3', 'linkedFamily', insertedOp._id, selectedFamily._id);
-             }
+            }
 
             console.log("Operation successfully created and linked!");
-            // Optional: Add logic here to clear the form or show a success message to the admin.
+            
+            // Update button to show success
+            $w('#button28').label = "Saved Successfully!";
+            
+            // Optional: Re-enable the button after 3 seconds if they want to make another request
+            // setTimeout(() => {
+            //     $w('#button28').label = "Save Request";
+            //     $w('#button28').enable();
+            // }, 3000);
 
         } catch (error) {
             console.error("Failed to create Operation:", error);
+            $w('#button28').label = "Error saving";
+            $w('#button28').enable();
         }
     });
 
     // ==========================================
     // HELPER FUNCTIONS
     // ==========================================
-
-    // Feeds data to the repeater or hides it if no family is selected
     function updateRepeaterUI() {
         if (selectedFamily) {
-            $w('#linkedFamilyRepeater').data = [selectedFamily]; // Repeaters always expect an array
+            $w('#linkedFamilyRepeater').data = [selectedFamily]; 
             $w('#linkedFamilyRepeater').expand();
         } else {
             $w('#linkedFamilyRepeater').data = [];
@@ -127,11 +151,9 @@ $w.onReady(function () {
         }
     }
 
-    // Maps the data to the specific text elements inside the repeater
     $w('#linkedFamilyRepeater').onItemReady(($item, itemData) => {
         $item('#linkedFamilyHead').text = itemData.headOfFamily || "N/A";
         $item('#linkedFamilyStaffNotes').text = itemData.staffNotes || "No staff notes available.";
         $item('#linkedFamilyComposition').text = itemData.familyDescription || "N/A";
     });
-
 });
