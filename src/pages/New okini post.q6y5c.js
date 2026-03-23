@@ -7,17 +7,23 @@ $w.onReady(function () {
     $w('#linkedFamilyRepeater').collapse(); 
 
     // ==========================================
-    // 1. DIRECT QUERY: SEARCH EXISTING FAMILIES
+    // 1. DIRECT QUERY: SEARCH EXISTING FAMILIES (UPGRADED)
     // ==========================================
     $w('#input3').onInput(async () => {
         let keyword = $w('#input3').value;
         
-        // Only search if they've typed at least 2 characters to save loading time
+        // Only search if they've typed at least 2 characters
         if (keyword.length > 1) {
             try {
                 let results = await wixData.query('Import4') // Families collection
                     .contains('headOfFamily', keyword)
-                    .limit(5) // Strictly limits the table to 5 rows
+                    .or(wixData.query('Import4').contains('familyId', keyword))
+                    .or(wixData.query('Import4').contains('directionsPhysicalLocation', keyword))
+                    .or(wixData.query('Import4').contains('familyDescription', keyword))
+                    .or(wixData.query('Import4').contains('staffNotes', keyword))                    
+                    .or(wixData.query('Import4').contains('email', keyword))
+                    .or(wixData.query('Import4').contains('primaryMailingAddress', keyword))
+                    .limit(10) // Strictly limits the table to 10 rows
                     .find();
                 
                 $w('#familySearchTable').rows = results.items;
@@ -25,7 +31,8 @@ $w.onReady(function () {
                 console.error("Search failed:", error);
             }
         } else {
-            $w('#familySearchTable').rows = []; // Clears table if input is empty
+            // Load defaults when search is cleared
+            loadDefaultFamilies();
         }
     });
 
@@ -35,6 +42,9 @@ $w.onReady(function () {
     $w('#addExistingFamily').onClick(() => {
         $w('#familySearchTable').expand();
         $w('#box248').collapse(); 
+        
+        // Load default families as soon as the table opens
+        loadDefaultFamilies();
     });
 
     $w('#addNewFamily').onClick(() => {
@@ -129,6 +139,7 @@ $w.onReady(function () {
             // setTimeout(() => {
             //     $w('#button28').label = "Save Request";
             //     $w('#button28').enable();
+            //     // Add code here to clear inputs if you want a clean slate
             // }, 3000);
 
         } catch (error) {
@@ -156,4 +167,18 @@ $w.onReady(function () {
         $item('#linkedFamilyStaffNotes').text = itemData.staffNotes || "No staff notes available.";
         $item('#linkedFamilyComposition').text = itemData.familyDescription || "N/A";
     });
+
+    // Fetches the 10 most recently added families to populate the default table
+    async function loadDefaultFamilies() {
+        try {
+            let defaultResults = await wixData.query('Import4')
+                .descending('_createdDate') // Sorts to show the newest families first
+                .limit(10)
+                .find();
+            
+            $w('#familySearchTable').rows = defaultResults.items;
+        } catch (error) {
+            console.error("Failed to load default families", error);
+        }
+    }
 });

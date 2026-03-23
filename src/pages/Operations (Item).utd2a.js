@@ -1,257 +1,246 @@
 import wixData from 'wix-data';
 
-// ====================================================================
-// --- Configuration ---
-const COLLECTIONS = {
-    OPERATIONS: "Import3",
-    FAMILIES: "Import4",
-    DONORS: "Import5",
-    INDIVIDUALS: "Import6"
-};
-
-const FIELDS = {
-    OP_FAMILY_REF: "linkedFamily",
-    OP_DONOR_REF: "linkedDonor",
-    OP_INDIVIDUAL_REF: "linkedIndividual",
-    OP_INDIVIDUAL_REF_REVERSE: "Import3_linkedIndividual",
-    FAMILY_MEMBERS_REF: "Import6_import_4_linked_family_members",
-    INDIVIDUAL_FAMILY_REF: "import_4_linked_family_members"
-};
-// ====================================================================
+let selectedFamily = null; 
+let isEditingFamily = false; 
+let currentOperationId = null; // Stores the current post ID globally for immediate linking
 
 $w.onReady(function () {
-    setInitialUiState();
 
+    // Hide the repeater by default
+    $w('#linkedFamilyRepeater').collapse();
+
+    // ==========================================
+    // 1. PAGE LOAD: GET CURRENT POST & ID
+    // ==========================================
     $w('#dynamicDataset').onReady(() => {
-        const currentOperation = $w('#dynamicDataset').getCurrentItem();
-        if (!currentOperation) {
-            console.error("PAGE LOAD FAILED: The dynamic dataset could not load an item. Please check the URL.");
-            return;
+        let currentOperation = $w('#dynamicDataset').getCurrentItem();
+        
+        if (currentOperation) {
+            currentOperationId = currentOperation._id; 
+            loadExistingLinkedFamily(currentOperationId);
         }
-        setupEventHandlers(currentOperation);
-        $w('#dataset1').onReady(async () => {
-            await populateMembersTableAndUpdateVisibility();
-        });
     });
 
-    // --- onBeforeSave handler for dataset7 ---
-    $w('#dataset7').onBeforeSave(() => {
-        const now = new Date();
-        const pad = (num) => String(num).padStart(2, '0');
-        const year = String(now.getFullYear()).slice(-2);
-        const month = pad(now.getMonth() + 1);
-        const day = pad(now.getDate());
-        const hours = pad(now.getHours());
-        const minutes = pad(now.getMinutes());
-        const seconds = pad(now.getSeconds());
-        const uniqueId = `IND-${year}${month}${day}${hours}${minutes}${seconds}`;
-
-        // Set the ID field on the item being saved.
-        $w('#dataset7').setFieldValue("individualId", uniqueId); // Use setFieldValue for single field
-
-        // *** FIXED: Return true to allow the save operation to proceed ***
-        return true;
+// ==========================================
+    // 2. UI TOGGLES (With Default Loading)
+    // ==========================================
+    $w('#addExistingFamily').onClick(() => {
+        $w('#familySearchTable').expand();
+        $w('#box248').collapse(); 
+        
+        // Load default families as soon as the table opens
+        loadDefaultFamilies();
     });
 
-    // --- onAfterSave handler for dataset7 ---
-    $w('#dataset7').onAfterSave(async (savedIndividual) => {
-        const linkedFamily = await $w('#dataset1').getCurrentItem();
-        if (linkedFamily && savedIndividual) {
-            await wixData.insertReference(COLLECTIONS.FAMILIES, FIELDS.FAMILY_MEMBERS_REF, linkedFamily._id, savedIndividual._id);
-            await wixData.insertReference(COLLECTIONS.INDIVIDUALS, FIELDS.INDIVIDUAL_FAMILY_REF, savedIndividual._id, linkedFamily._id);
+    $w('#addNewFamily').onClick(() => {
+        isEditingFamily = false; 
+        clearFamilyForm(); 
+        $w('#box248').expand();
+        $w('#familySearchTable').collapse(); 
+    });
+
+    // ==========================================
+    // 3. SEARCH & IMMEDIATE LINK 
+    // ==========================================
+    $w('#input3').onInput(async () => {
+        let keyword = $w('#input3').value;
+        
+        if (keyword.length > 1) {
+            try {
+                let results = await wixData.query('Import4') 
+                    .contains('headOfFamily', keyword)
+                    .or(wixData.query('Import4').contains('familyId', keyword))
+                    .or(wixData.query('Import4').contains('directionsPhysicalLocation', keyword))
+                    .or(wixData.query('Import4').contains('familyDescription', keyword))
+                    .or(wixData.query('Import4').contains('staffNotes', keyword))                    
+                    .or(wixData.query('Import4').contains('email', keyword))
+                    .or(wixData.query('Import4').contains('primaryMailingAddress', keyword))
+                    .limit(10) 
+                    .find();
+                
+                $w('#familySearchTable').rows = results.items;
+            } catch (error) {
+                console.error("Search failed:", error);
+            }
+        } else {
+            // If they delete their search query, reload the default families instead of a blank table
+            loadDefaultFamilies(); 
         }
-        await populateMembersTableAndUpdateVisibility();
     });
-});
 
-/**
- * Sets the initial collapsed state of search elements.
- */
-function setInitialUiState() {
-    $w('#familySearchTable, #input3, #donorSearchTable, #searchInput').collapse();
-}
+    $w('#familySearchTable').onRowSelect(async (event) => {
+        selectedFamily = event.rowData; 
+        isEditingFamily = true; 
+        updateRepeaterUI();
+        $w('#familySearchTable').collapse(); 
 
-/**
- * Populates the table and updates visibility for the individuals section.
- */
-async function populateMembersTableAndUpdateVisibility() {
-    await $w('#dataset1').refresh();
-    const linkedFamily = $w('#dataset1').getCurrentItem();
+        if (currentOperationId && selectedFamily) {
+            try {
+                await wixData.replaceReferences('Import3', 'linkedFamily', currentOperationId, [selectedFamily._id]);
+                console.log("Existing family instantly linked!");
+            } catch (err) {
+                console.error("Instant link failed", err);
+            }
+        }
+    });
 
-    if (linkedFamily) {
-        const results = await wixData.query(COLLECTIONS.INDIVIDUALS)
-            .hasSome(FIELDS.INDIVIDUAL_FAMILY_REF, linkedFamily._id)
-            .find();
-        $w('#familyMembersDisplayTable').rows = results.items;
-        $w('#familyMembersDisplayTable, #linkedMemberRepeater, #box148').expand();
-    } else {
-        $w('#familyMembersDisplayTable').rows = [];
-        $w('#familyMembersDisplayTable, #linkedMemberRepeater, #box148').collapse();
-    }
-}
+    // ==========================================
+    // 4. IMMEDIATE UNLINK (Remove Button)
+    // ==========================================
+    $w('#removeLinkedFamilyButton').onClick(async () => {
+        selectedFamily = null; 
+        updateRepeaterUI();
 
-/**
- * Sets up all interactive element event handlers for the page.
- * *** MODIFIED: Uses correct error text ID placeholder ***
- */
-function setupEventHandlers(currentOperation) {
-    const operationId = currentOperation._id;
+        // IMMEDIATE SAVE: Remove the link from the database (passing empty array [])
+        if (currentOperationId) {
+            try {
+                await wixData.replaceReferences('Import3', 'linkedFamily', currentOperationId, []);
+                console.log("Family instantly unlinked!");
+            } catch (err) {
+                console.error("Instant unlink failed", err);
+            }
+        }
+    });
 
-    // *** Find the correct ID for your error text element in the Wix Editor ***
-    // *** Replace '#<CORRECT_ERROR_TEXT_ID>' below with the actual ID ***
-    const errorTextElement = $w('#text147'); // <-- REPLACE THIS ID
+    // ==========================================
+    // 5. THE "EDIT FAMILY" BUTTON
+    // ==========================================
+    $w('#button29').onClick(() => {
+        isEditingFamily = true; 
+        if (selectedFamily) populateFamilyForm(selectedFamily); 
+        $w('#familySearchTable').collapse();
+        $w('#box248').expand();
+    });
 
-    $w('#AddNewMemberButton').onClick(async () => {
+    // ==========================================
+    // 6. SAVE FAMILY & IMMEDIATE LINK (Box248)
+    // ==========================================
+    $w('#saveButton').onClick(async () => {
+        let familyData = getFamilyFormData(); 
+
         try {
-            // Clear previous errors if the element exists
-            if (errorTextElement.rendered) {
-                errorTextElement.collapse();
-            }
-
-            // Attempt to save. This will trigger all dataset validations.
-            await $w('#dataset7').save();
-
-            // Clear inputs on success
-            $w('#newMemberAgeInput').value = null;
-            $w('#newMemberBoyOrGirlInput').value = null;
-            $w('#newMemberSizeOrInfoInput').value = null;
-
-        } catch (err) {
-            console.error("Failed to save new member:", err);
-
-            // Display error message if the element exists
-            if (errorTextElement.rendered) {
-                if (err.message.includes("validation failed")) {
-                    errorTextElement.text = "Please fill in all required member fields correctly.";
-                } else {
-                    errorTextElement.text = "An error occurred. Please try again.";
-                }
-                errorTextElement.expand();
+            if (isEditingFamily && selectedFamily) {
+                familyData._id = selectedFamily._id; 
+                familyData.familyId = selectedFamily.familyId; 
+                selectedFamily = await wixData.update('Import4', familyData);
             } else {
-                // Fallback if the error element ID is wrong or missing
-                console.error("Error text element not found. Message:", err.message);
+                familyData.familyId = "idfam-" + Date.now();
+                selectedFamily = await wixData.insert('Import4', familyData); 
             }
+
+            updateRepeaterUI();
+            $w('#box248').collapse(); 
+
+            // IMMEDIATE SAVE: Link the newly created/updated family
+            if (currentOperationId && selectedFamily) {
+                await wixData.replaceReferences('Import3', 'linkedFamily', currentOperationId, [selectedFamily._id]);
+                console.log("New/Edited family instantly linked!");
+            }
+
+        } catch (error) {
+            console.error("Failed to save family:", error);
         }
     });
 
-    // --- Other event handlers ---
+    // ==========================================
+    // 7. FINAL SAVE POST BUTTON (Standard Fields Only)
+    // ==========================================
+    $w('#button28').onClick(async () => {
+        $w('#button28').disable();
+        $w('#button28').label = "Saving...";
+
+        try {
+            // Because references are already handled immediately, we only need to save the dataset
+            await $w('#dynamicDataset').save(); 
+
+            $w('#button28').label = "Saved Successfully!";
+            setTimeout(() => {
+                $w('#button28').label = "Save Changes";
+                $w('#button28').enable();
+            }, 3000);
+            
+        } catch (error) {
+            console.error("Failed to update post:", error);
+            $w('#button28').label = "Error saving";
+            $w('#button28').enable();
+        }
+    });
+
+    // ==========================================
+    // HELPER FUNCTIONS 
+    // ==========================================
+
+// Fetches the 10 most recently added families to populate the default table
+    async function loadDefaultFamilies() {
+        try {
+            let defaultResults = await wixData.query('Import4')
+                .descending('_createdDate') // Sorts to show the newest families first
+                .limit(10)
+                .find();
+            
+            $w('#familySearchTable').rows = defaultResults.items;
+        } catch (error) {
+            console.error("Failed to load default families", error);
+        }
+    }
+
+    async function loadExistingLinkedFamily(operationId) {
+        try {
+            let results = await wixData.queryReferenced('Import3', operationId, 'linkedFamily');
+            if (results.items.length > 0) {
+                selectedFamily = results.items[0];
+                updateRepeaterUI();
+            }
+        } catch (error) {
+            console.error("Could not load linked family:", error);
+        }
+    }
+
+    function updateRepeaterUI() {
+        if (selectedFamily) {
+            $w('#linkedFamilyRepeater').data = [selectedFamily]; 
+            $w('#linkedFamilyRepeater').expand();
+        } else {
+            $w('#linkedFamilyRepeater').data = [];
+            $w('#linkedFamilyRepeater').collapse();
+        }
+    }
+
     $w('#linkedFamilyRepeater').onItemReady(($item, itemData) => {
-        $item('#removeLinkedFamilyButton').onClick(() => handleRemoveLink(operationId, itemData._id, 'Family'));
+        $item('#linkedFamilyHead').text = itemData.headOfFamily || "N/A";
+        $item('#linkedFamilyStaffNotes').text = itemData.staffNotes || "No staff notes available.";
+        $item('#linkedFamilyComposition').text = itemData.familyDescription || "N/A";
     });
-    $w('#linkedDonorsRepeater').onItemReady(($item, itemData) => {
-        $item('#removeLinkedDonorButton').onClick(() => handleRemoveLink(operationId, itemData._id, 'Donor'));
-    });
-    $w('#linkedMemberRepeater').onItemReady(($item, itemData) => {
-        $item('#removeLinkedMemberButton').onClick(() => handleRemoveLink(operationId, itemData._id, 'Individual'));
-    });
-    $w('#addExistingFamily').onClick(() => $w('#familySearchTable, #input3').expand());
-    $w('#addExistingDonor').onClick(() => $w('#donorSearchTable, #searchInput').expand());
-    $w('#input3').onInput(() => filterSearchTable('Family'));
-    $w('#searchInput').onInput(() => filterSearchTable('Donor'));
-    $w('#familySearchTable').onRowSelect((event) => handleLink(operationId, event.rowData, 'Family'));
-    $w('#donorSearchTable').onRowSelect((event) => handleLink(operationId, event.rowData, 'Donor'));
-    $w('#familyMembersDisplayTable').onRowSelect((event) => handleLink(operationId, event.rowData, 'Individual'));
-}
 
-
-/**
- * Handles linking an item to the current Operation.
- */
-async function handleLink(operationId, selectedItem, type) {
-    try {
-        let refField, linkedDataset;
-        if (type === 'Family') {
-            refField = FIELDS.OP_FAMILY_REF;
-            linkedDataset = $w('#dataset1');
-            $w('#familySearchTable, #input3').collapse();
-        } else if (type === 'Donor') {
-            refField = FIELDS.OP_DONOR_REF;
-            linkedDataset = $w('#dataset5');
-            $w('#donorSearchTable, #searchInput').collapse();
-        } else if (type === 'Individual') {
-            refField = FIELDS.OP_INDIVIDUAL_REF;
-            linkedDataset = $w('#dataset3');
-            // Check if reference already exists before inserting
-             const existingRefs = await wixData.queryReferenced(COLLECTIONS.INDIVIDUALS, selectedItem._id, FIELDS.OP_INDIVIDUAL_REF_REVERSE);
-             if (!existingRefs.items.some(ref => ref._id === operationId)) {
-                await wixData.insertReference(COLLECTIONS.INDIVIDUALS, FIELDS.OP_INDIVIDUAL_REF_REVERSE, selectedItem._id, operationId);
-             }
-        }
-
-        // Check if reference already exists before inserting
-         const existingMainRefs = await wixData.queryReferenced(COLLECTIONS.OPERATIONS, operationId, refField);
-         if (!existingMainRefs.items.some(ref => ref._id === selectedItem._id)) {
-            await wixData.insertReference(COLLECTIONS.OPERATIONS, refField, operationId, selectedItem._id);
-         }
-
-        await linkedDataset.refresh();
-        if (type === 'Family') await populateMembersTableAndUpdateVisibility();
-    } catch (err) { console.error(`Error linking ${type}:`, err); }
-}
-
-/**
- * Handles removing a reference from the current Operation.
- */
-async function handleRemoveLink(operationId, itemIdToRemove, type) {
-    try {
-        let refField, linkedDataset;
-        if (type === 'Family') {
-            const { items: individualsToRemove } = await $w('#dataset3').getItems(0, $w('#dataset3').getTotalCount());
-            for (const individual of individualsToRemove) {
-                // Ensure we only attempt to remove the link if it actually exists for this individual
-                const opRefs = await wixData.queryReferenced(COLLECTIONS.INDIVIDUALS, individual._id, FIELDS.OP_INDIVIDUAL_REF_REVERSE);
-                if (opRefs.items.some(ref => ref._id === operationId)) {
-                   await handleRemoveLink(operationId, individual._id, 'Individual');
-                }
-            }
-            refField = FIELDS.OP_FAMILY_REF;
-            linkedDataset = $w('#dataset1');
-        } else if (type === 'Donor') {
-            refField = FIELDS.OP_DONOR_REF;
-            linkedDataset = $w('#dataset5');
-        } else if (type === 'Individual') {
-            refField = FIELDS.OP_INDIVIDUAL_REF;
-            linkedDataset = $w('#dataset3');
-             // Check if reverse reference exists before removing
-             const existingReverseRefs = await wixData.queryReferenced(COLLECTIONS.INDIVIDUALS, itemIdToRemove, FIELDS.OP_INDIVIDUAL_REF_REVERSE);
-             if (existingReverseRefs.items.some(ref => ref._id === operationId)) {
-                await wixData.removeReference(COLLECTIONS.INDIVIDUALS, FIELDS.OP_INDIVIDUAL_REF_REVERSE, itemIdToRemove, operationId);
-             }
-        }
-
-         // Check if main reference exists before removing
-         const existingMainRefs = await wixData.queryReferenced(COLLECTIONS.OPERATIONS, operationId, refField);
-         if (existingMainRefs.items.some(ref => ref._id === itemIdToRemove)) {
-            await wixData.removeReference(COLLECTIONS.OPERATIONS, refField, operationId, itemIdToRemove);
-         }
-
-        await linkedDataset.refresh();
-        if (type === 'Family') await populateMembersTableAndUpdateVisibility();
-    } catch (err) { console.error(`Error removing ${type} link:`, err); }
-}
-
-
-/**
- * Filters the search tables for Families or Donors.
- */
-async function filterSearchTable(type) {
-    let searchDataset, searchInput, searchableFields;
-    if (type === 'Family') {
-        searchDataset = $w('#dataset2');
-        searchInput = $w('#input3');
-        searchableFields = ['headOfFamily', 'familyMembers', 'familyDescription'];
-    } else { // Donor
-        searchDataset = $w('#dataset6');
-        searchInput = $w('#searchInput');
-        searchableFields = ['donorName', 'organizationName', 'donorEmail'];
+    function clearFamilyForm() {
+        $w('#headOffamilyInput').value = "";
+        $w('#familyDescriptionInput').value = "";
+        $w('#staffNotes').value = "";
+        $w('#primaryMailingAddressInput').value = "";
+        $w('#phone').value = "";
+        $w('#directionsOrPhysAddress').value = "";
+        $w('#email').value = "";
     }
-    const searchTerm = searchInput.value;
-    let filter = wixData.filter();
-    if (searchTerm && searchTerm.length > 0) {
-        // Build the filter dynamically for each searchable field
-        filter = searchableFields
-            .map(field => wixData.filter().contains(field, searchTerm))
-            .reduce((f1, f2) => f1.or(f2)); // Combine filters with OR
+
+    function populateFamilyForm(data) {
+        $w('#headOffamilyInput').value = data.headOfFamily || "";
+        $w('#familyDescriptionInput').value = data.familyDescription || "";
+        $w('#staffNotes').value = data.staffNotes || "";
+        $w('#primaryMailingAddressInput').value = data.primaryMailingAddress || "";
+        $w('#phone').value = data.phone || "";
+        $w('#directionsOrPhysAddress').value = data.directionsPhysicalLocation || "";
+        $w('#email').value = data.email || "";
     }
-    await searchDataset.setFilter(filter);
-}
+
+    function getFamilyFormData() {
+        return {
+            headOfFamily: $w('#headOffamilyInput').value, 
+            familyDescription: $w('#familyDescriptionInput').value,
+            staffNotes: $w('#staffNotes').value,
+            primaryMailingAddress: $w('#primaryMailingAddressInput').value,
+            phone: $w('#phone').value,
+            directionsPhysicalLocation: $w('#directionsOrPhysAddress').value,
+            email: $w('#email').value
+        };
+    }
+});
