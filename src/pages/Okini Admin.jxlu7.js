@@ -2,55 +2,45 @@ import wixData from 'wix-data';
 
 // ====================================================================
 // --- Configuration ---
-const DATASET_ID = "#dataset1"; // Connected to Operations (Import3)
+const DATASET_ID = "#dataset1"; 
 const FAMILIES_COLLECTION = "Import4"; 
 const DONORS_COLLECTION_ID = "Import5"; 
 const APPROVAL_FIELD_KEY = "approvedDonor";
 
-// Dropdown CMS Field Keys
-const DROPDOWN_1_FIELD = "whichOkini";  // Linked to #dropdown1
-const DROPDOWN_2_FIELD = "coordinator"; // Linked to #dropdown2
+const DROPDOWN_1_FIELD = "whichOkini";  
+const DROPDOWN_2_FIELD = "coordinator"; 
 // ====================================================================
 
 $w.onReady(function () {
     updateNewDonorCount();
 
-    // Apply the default filter as soon as the dataset is ready
-    $w(DATASET_ID).onReady(() => {
-        applyFilters();
-    });
+    // REMOVED the on-load applyFilters() completely.
+    // The dataset will now load natively and safely using the Editor's default filter.
 
-    // 1. Search button & Enter key
+    // 1. Search button & Enter key triggers
     $w('#vectorImage1').onClick(() => applyFilters());
     $w('#input1').onKeyPress((event) => {
         if (event.key === "Enter") applyFilters();
     });
 
-    // 2. Archive switch toggle
-    $w('#switch3').onChange(() => {
-        applyFilters();
-        updateRepeaterColors();
-    });
+    // 2. Archive switch trigger
+    $w('#switch3').onChange(() => applyFilters());
 
-    // 3. Dropdown changes (Separated to satisfy TypeScript)
+    // 3. Dropdown triggers
     $w('#dropdown1').onChange(() => applyFilters());
     $w('#dropdown2').onChange(() => applyFilters());
 
-// 4. RESET BUTTON 
-    // (Make sure you actually have a button with the ID #resetButton on your page!)
-    $w('#resetButton').onClick(() => {
-        // Clear all input values
+    // 4. RESET BUTTON
+$w('#resetButton').onClick(() => {
         $w('#input1').value = "";
         $w('#dropdown1').value = null;
         $w('#dropdown2').value = null;
         $w('#switch3').checked = false; 
         
-        // Re-apply the blank filters to reset the dataset
         applyFilters();
-        updateRepeaterColors();
     });
 
-    // 5. Keep color updated on repeater changes
+    // 5. Keep colors updated automatically
     $w('#requestsRepeater').onItemReady(($item, itemData, index) => {
         const isArchiveMode = $w('#switch3').checked;
         $item('#box151').style.backgroundColor = isArchiveMode ? "#FFE4B5" : "#FCFFD0"; 
@@ -59,41 +49,33 @@ $w.onReady(function () {
 
 /**
  * Searches Operations, Linked Families, Archive state, and Dropdowns.
+ * This now ONLY runs when the user interacts with an input!
  */
 async function applyFilters() {
-    let searchValue = $w('#input1').value.trim();
+    let searchValue = $w('#input1').value ? $w('#input1').value.trim() : "";
     let isArchiveMode = $w('#switch3').checked;
     
-    // Get dropdown values
     let drop1Value = $w('#dropdown1').value;
     let drop2Value = $w('#dropdown2').value;
 
-    // Start with a blank filter
     let opsFilter = wixData.filter();
 
-    // -----------------------------------------------------------
-    // 1. APPLY ARCHIVE FILTER
-    // -----------------------------------------------------------
+    // --- 1. ARCHIVE FILTER ---
     if (isArchiveMode) {
         opsFilter = opsFilter.eq("archive", true);
     } else {
         opsFilter = opsFilter.ne("archive", true); 
     }
 
-    // -----------------------------------------------------------
-    // 2. APPLY DROPDOWN FILTERS
-    // -----------------------------------------------------------
+    // --- 2. DROPDOWN FILTERS ---
     if (drop1Value && drop1Value !== "") {
-        opsFilter = opsFilter.eq(DROPDOWN_1_FIELD, drop1Value);
+        opsFilter = opsFilter.contains(DROPDOWN_1_FIELD, drop1Value);
     }
-    
     if (drop2Value && drop2Value !== "") {
-        opsFilter = opsFilter.eq(DROPDOWN_2_FIELD, drop2Value);
+        opsFilter = opsFilter.contains(DROPDOWN_2_FIELD, drop2Value);
     }
 
-    // -----------------------------------------------------------
-    // 3. APPLY TEXT SEARCH FILTER
-    // -----------------------------------------------------------
+    // --- 3. TEXT SEARCH FILTER ---
     if (searchValue !== "") {
         let matchingFamilyIds = [];
         
@@ -128,9 +110,7 @@ async function applyFilters() {
         opsFilter = opsFilter.and(textFilter);
     }
 
-    // -----------------------------------------------------------
-    // 4. EXECUTE FILTER ON DATASET
-    // -----------------------------------------------------------
+    // --- 4. EXECUTE FILTER ---
     try {
         await $w(DATASET_ID).setFilter(opsFilter);
         console.log("Filters applied successfully.");
@@ -139,15 +119,9 @@ async function applyFilters() {
     }
 }
 
-function updateRepeaterColors() {
-    const isArchiveMode = $w('#switch3').checked;
-    const bgColor = isArchiveMode ? "#FFE4B5" : "#FCFFD0"; 
-    
-    $w('#requestsRepeater').forEachItem(($item) => {
-        $item('#box151').style.backgroundColor = bgColor;
-    });
-}
-
+/**
+ * Queries the Donors collection to count unapproved items.
+ */
 async function updateNewDonorCount() {
     const countElement = $w('#text127'); 
     try {
