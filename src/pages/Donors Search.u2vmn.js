@@ -1,89 +1,189 @@
-// FINAL SIMPLIFIED CODE - All status filter functionality has been removed.
 import wixData from 'wix-data';
 import wixLocationFrontend from 'wix-location-frontend';
 
-// REMOVED: No longer need a global variable for status filters.
+// ====================================================================
+// --- Configuration ---
+const DATASET_ID = "#dataset1";
+const TABLE_ID = "#donorsTable";
 
-// A timer for debouncing the search input to improve performance
+// Ensure this is your Operations collection name
+const OPERATIONS_COLLECTION = "Import3"; 
+// ====================================================================
+
 let debounceTimer;
+let activeDonorIds = []; // Caches donors who have active requests
 
 $w.onReady(function () {
-    // --- Set up all page functionality ---
     setupRowSelect();
-    // REMOVED: The call to setupFilterSelector() is gone.
-    setupInstantSearch();
-
-    $w('#dataset1').onReady(() => {
-        updateFeedbackText();
+    
+    // 1. Load active donor IDs immediately so statuses are ready
+    loadActiveDonors().then(() => {
+        // Apply initial blank filters & populate table once the dataset is ready
+        $w(DATASET_ID).onReady(() => {
+            applyFilters(); 
+        });
     });
+
+    // 2. Search bar instant search
+    $w('#input1').onInput(() => {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => applyFilters(), 500);
+    });
+
+    // 3. Button and Enter key
+    $w('#button28').onClick(() => applyFilters());
+    $w('#input1').onKeyPress((event) => {
+        if (event.key === "Enter") applyFilters();
+    });
+
+    // 4. Dropdowns
+    $w('#dropdown1').onChange(() => applyFilters());
+    $w('#dropdown2').onChange(() => applyFilters());
 });
 
 /**
- * Sets up the onRowSelect event for the operationsTable.
- * Remember to use the console.log() method from our last step to find your correct Field Key.
+ * Finds all unarchived operations to identify donors "Awaiting Fulfillment"
  */
-function setupRowSelect() {
-    $w('#donorsTable').onRowSelect((event) => {
-        // DEBUGGING LOG: Leave this here to easily check the data for any row.
-        console.log("Clicked Row Data:", event.rowData);
+async function loadActiveDonors() {
+    try {
+        const activeOps = await wixData.query(OPERATIONS_COLLECTION)
+            .ne("archive", true)
+            .include("linkedDonor") // <--- FIX: Forces Wix to load the Multi-Reference data
+            .limit(1000)
+            .find();
         
-        // IMPORTANT: Replace this with the actual Field Key you found in your console.
-        const itemPageLink = event.rowData['link-donors-donorId']; 
+        let ids = new Set();
+        activeOps.items.forEach(op => {
+            // Because of .include(), linkedDonor is now an array of full Donor Objects
+            if (op.linkedDonor && Array.isArray(op.linkedDonor)) {
+                op.linkedDonor.forEach(donorObj => {
+                    if (donorObj._id) {
+                        ids.add(donorObj._id); // Extract the ID from the object
+                    } else if (typeof donorObj === "string") {
+                        ids.add(donorObj); // Fallback just in case
+                    }
+                });
+            }
+        });
         
-        if (itemPageLink) {
-            wixLocationFrontend.to(itemPageLink);
-        } else {
-            console.error("Navigation failed: Could not find the link field. Check the object printed above for the correct Field Key.");
-        }
-    });
+        activeDonorIds = Array.from(ids);
+        console.log("✅ Successfully loaded Active Donor IDs:", activeDonorIds); 
+        
+    } catch (error) {
+        console.error("Failed to load active donors:", error);
+    }
 }
 
-// REMOVED: The entire setupFilterSelector() function is deleted.
-
 /**
- * Sets up an instant "as-you-type" search on the searchInput element.
- */
-function setupInstantSearch() {
-    $w('#searchInput').onInput(() => {
-        clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(() => {
-            applyFilters();
-        }, 500);
-    });
-}
-
-/**
- * SIMPLIFIED: This master function now only creates a filter based on the search term.
+ * Master filter function for Search and Dropdowns
  */
 async function applyFilters() {
-    const searchableFields = [
-        'donorName', 'organizationName', 'donorEmail',
-        'phone', 'staffNotes'
-    ];
+    let searchTerm = $w('#input1').value ? $w('#input1').value.trim() : "";
+    let statusValue = $w('#dropdown1').value;
+    let coordinatorValue = $w('#dropdown2').value;
 
-    let finalFilter = wixData.filter(); // Start with an empty filter (shows all items)
-    let searchTerm = $w('#searchInput').value;
+    let mainFilter = wixData.filter();
 
-    // If there is a search term, create a search filter. Otherwise, the filter remains empty.
-    if (searchTerm && searchTerm.length > 0) {
-        const searchFilters = searchableFields.map(field => wixData.filter().contains(field, searchTerm));
-        finalFilter = searchFilters.reduce((fullFilter, currentFilter) => fullFilter.or(currentFilter));
+    // --- 1. COORDINATOR FILTER ---
+    if (coordinatorValue && coordinatorValue !== "") {
+        let coordOps = await wixData.query(OPERATIONS_COLLECTION)
+            .contains("coordinator", coordinatorValue)
+            .include("linkedDonor") // <--- FIX: Applied to Coordinator search as well
+            .limit(1000)
+            .find();
+        
+        let coordDonorIds = [];
+        coordOps.items.forEach(op => {
+            if (op.linkedDonor && Array.isArray(op.linkedDonor)) {
+                op.linkedDonor.forEach(donorObj => {
+                    if (donorObj._id) coordDonorIds.push(donorObj._id);
+                    else if (typeof donorObj === "string") coordDonorIds.push(donorObj);
+                });
+            }
+        });
+
+        if (coordDonorIds.length === 0) {
+            mainFilter = mainFilter.eq("_id", "force-empty-no-match");
+        } else {
+            mainFilter = mainFilter.hasSome("_id", coordDonorIds);
+        }
     }
-    
-    await $w('#dataset1').setFilter(finalFilter);
-    updateFeedbackText();
+
+    // --- 2. STATUS FILTER ---
+    if (statusValue === "pendingApproval") {
+        mainFilter = mainFilter.ne("approvedDonor", true);
+    } else if (statusValue === "awaitingFulfillment") {
+        mainFilter = mainFilter.eq("approvedDonor", true);
+        if (activeDonorIds.length > 0) {
+            mainFilter = mainFilter.hasSome("_id", activeDonorIds);
+        } else {
+            mainFilter = mainFilter.eq("_id", "force-empty-no-match");
+        }
+    } else if (statusValue === "fulfilledInactive") {
+        mainFilter = mainFilter.eq("approvedDonor", true);
+        if (activeDonorIds.length > 0) {
+            mainFilter = mainFilter.not(wixData.filter().hasSome("_id", activeDonorIds));
+        }
+    }
+
+    // --- 3. TEXT SEARCH ---
+    if (searchTerm !== "") {
+        mainFilter = mainFilter.and(
+            wixData.filter().contains("donorName", searchTerm)
+            .or(wixData.filter().contains("organizationName", searchTerm))
+            .or(wixData.filter().contains("donorEmail", searchTerm))
+            .or(wixData.filter().contains("phone", searchTerm))
+            .or(wixData.filter().contains("staffNotes", searchTerm))
+        );
+    }
+
+    // --- 4. EXECUTE & UPDATE TABLE ---
+    try {
+        await $w(DATASET_ID).setFilter(mainFilter);
+        let totalCount = $w(DATASET_ID).getTotalCount();
+        
+        // Fetch matching items
+        let results = await $w(DATASET_ID).getItems(0, totalCount > 0 ? totalCount : 1);
+        
+        // Inject custom status text
+        let newRows = results.items.map(item => {
+            let statusText = "🔵 Fulfilled / Inactive";
+            
+            if (item.approvedDonor !== true) {
+                statusText = "🔴 Pending Approval";
+            } else if (activeDonorIds.includes(item._id)) {
+                statusText = "🟠 Awaiting Fulfillment";
+            }
+
+            return {
+                ...item,
+                donorStatusIndicator: statusText
+            };
+        });
+
+        $w(TABLE_ID).rows = newRows;
+        
+        // Update feedback text
+        if (totalCount > 0) {
+            $w('#messageText').text = `Showing ${totalCount} donors.`;
+        } else {
+            $w('#messageText').text = "No donors found matching your criteria.";
+        }
+        $w('#messageText').expand();
+
+    } catch (error) {
+        console.error("Filter failed:", error);
+    }
 }
 
 /**
- * Updates the messageText element with the current item count.
+ * Row Selection for Table Navigation
  */
-function updateFeedbackText() {
-    const totalCount = $w('#dataset1').getTotalCount();
-    if (totalCount > 0) {
-        $w('#messageText').text = `Showing ${totalCount} donors.`;
-        $w('#messageText').expand();
-    } else {
-        $w('#messageText').text = "No donors found matching your criteria.";
-        $w('#messageText').expand();
-    }
+function setupRowSelect() {
+    $w(TABLE_ID).onRowSelect((event) => {
+        const itemPageLink = event.rowData['link-donors-donorId']; 
+        if (itemPageLink) {
+            wixLocationFrontend.to(itemPageLink);
+        }
+    });
 }
