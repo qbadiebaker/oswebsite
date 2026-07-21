@@ -1,9 +1,5 @@
-/***
-* Code added by AI Assistant
-* Prompt: Opens Projects Item page
-***/
-
 import wixLocationFrontend from 'wix-location-frontend';
+import wixData from 'wix-data';
 
 $w.onReady(function () {
     // Replace #repeaterId with the actual ID of your repeater
