@@ -1,139 +1,156 @@
 import wixData from 'wix-data';
+import wixLocation from 'wix-location';
 
-// ====================================================================
-// --- Configuration ---
-const DATASET_ID = "#dataset1"; 
-const FAMILIES_COLLECTION = "Import4"; 
-const DONORS_COLLECTION_ID = "Import5"; 
-const APPROVAL_FIELD_KEY = "approvedDonor";
+/** @type {any[]} */
+let allFamiliesWithRequests = []; 
 
-const DROPDOWN_1_FIELD = "whichOkini";  
-const DROPDOWN_2_FIELD = "coordinator"; 
-// ====================================================================
+$w.onReady(async function () {
+    $w('#familyRepeater').collapse();
+    
+    await loadAdminData();
 
-$w.onReady(function () {
-    updateNewDonorCount();
-
-    // REMOVED the on-load applyFilters() completely.
-    // The dataset will now load natively and safely using the Editor's default filter.
-
-    // 1. Search button & Enter key triggers
-    $w('#vectorImage1').onClick(() => applyFilters());
-    $w('#input1').onKeyPress((event) => {
-        if (event.key === "Enter") applyFilters();
-    });
-
-    // 2. Archive switch trigger
-    $w('#switch3').onChange(() => applyFilters());
-
-    // 3. Dropdown triggers
+    // Trigger search when the search button is clicked
+    $w('#button28').onClick(() => applyFilters());
+    
+    // Trigger filters on change
     $w('#dropdown1').onChange(() => applyFilters());
     $w('#dropdown2').onChange(() => applyFilters());
+    
+    // Trigger archive mode toggle
+    $w('#switch3').onChange(() => applyFilters());
 
-    // 4. RESET BUTTON
-$w('#resetButton').onClick(() => {
-        $w('#input1').value = "";
-        $w('#dropdown1').value = null;
-        $w('#dropdown2').value = null;
-        $w('#switch3').checked = false; 
-        
-        applyFilters();
-    });
-
-    // 5. Keep colors updated automatically
-    $w('#requestsRepeater').onItemReady(($item, itemData, index) => {
-        const isArchiveMode = $w('#switch3').checked;
-        $item('#box151').style.backgroundColor = isArchiveMode ? "#FFE4B5" : "#FCFFD0"; 
-    });
+    // Reset button
+    $w('#resetButton').onClick(() => resetFilters());
 });
 
-/**
- * Searches Operations, Linked Families, Archive state, and Dropdowns.
- * This now ONLY runs when the user interacts with an input!
- */
-async function applyFilters() {
-    let searchValue = $w('#input1').value ? $w('#input1').value.trim() : "";
-    let isArchiveMode = $w('#switch3').checked;
-    
-    let drop1Value = $w('#dropdown1').value;
-    let drop2Value = $w('#dropdown2').value;
+async function loadAdminData() {
+    try {
+        // Fetch Families 
+        let familyResults = await wixData.query('Import4')
+            .descending('_createdDate')
+            .limit(100) 
+            .find();
 
-    let opsFilter = wixData.filter();
+        let families = familyResults.items;
 
-    // --- 1. ARCHIVE FILTER ---
-    if (isArchiveMode) {
-        opsFilter = opsFilter.eq("archive", true);
-    } else {
-        opsFilter = opsFilter.ne("archive", true); 
+        // Fetch Requests concurrently
+        allFamiliesWithRequests = await Promise.all(families.map(async (family) => {
+            let reqResults = await wixData.query('Import3')
+                .hasSome('linkedFamily', [family._id])
+                .find();
+            
+            family.requests = reqResults.items;
+            return family;
+        }));
+
+        // Populate repeater initially
+        applyFilters(); 
+        $w('#familyRepeater').expand();
+
+    } catch (error) {
+        console.error("Error loading admin data:", error);
     }
+}
 
-    // --- 2. DROPDOWN FILTERS ---
-    if (drop1Value && drop1Value !== "") {
-        opsFilter = opsFilter.contains(DROPDOWN_1_FIELD, drop1Value);
-    }
-    if (drop2Value && drop2Value !== "") {
-        opsFilter = opsFilter.contains(DROPDOWN_2_FIELD, drop2Value);
-    }
+// ==========================================
+// FILTERING LOGIC
+// ==========================================
+function applyFilters() {
+    let searchTerm = $w('#input1').value.toLowerCase(); 
+    let selectedOkini = $w('#dropdown1').value;         
+    let selectedCoordinator = $w('#dropdown2').value;   
+    let archiveMode = $w('#switch3').checked;           
 
-    // --- 3. TEXT SEARCH FILTER ---
-    if (searchValue !== "") {
-        let matchingFamilyIds = [];
+    let filteredData = allFamiliesWithRequests.filter((family) => {
         
-        try {
-            let familyQuery = wixData.query(FAMILIES_COLLECTION)
-                .contains("headOfFamily", searchValue)
-                .or(wixData.query(FAMILIES_COLLECTION).contains("familyMembers", searchValue))
-                .or(wixData.query(FAMILIES_COLLECTION).contains("familyDescription", searchValue))
-                .or(wixData.query(FAMILIES_COLLECTION).contains("primaryMailingAddress", searchValue))
-                .or(wixData.query(FAMILIES_COLLECTION).contains("directionsPhysicalLocation", searchValue))
-                .or(wixData.query(FAMILIES_COLLECTION).contains("phone", searchValue))
-                .or(wixData.query(FAMILIES_COLLECTION).contains("email", searchValue))
-                .or(wixData.query(FAMILIES_COLLECTION).contains("staffNotes", searchValue))
-                .limit(1000); 
+        // 1. ARCHIVE MODE FILTER
+        // Adjust "Archived" to match whatever value you use in your DB.
+        let isArchived = family.status === "Archived";
+        let passesArchiveCheck = archiveMode ? isArchived : !isArchived;
 
-            let familyResults = await familyQuery.find();
-            matchingFamilyIds = familyResults.items.map(fam => fam._id);
-        } catch (err) {
-            console.error("Failed to query Families collection:", err);
+        if (!passesArchiveCheck) return false;
+
+        // 2. SEARCH INPUT FILTER
+        let matchesSearch = true;
+        if (searchTerm) {
+            let headName = family.headOfFamily ? family.headOfFamily.toLowerCase() : "";
+            let famId = family.familyId ? family.familyId.toLowerCase() : "";
+            matchesSearch = headName.includes(searchTerm) || famId.includes(searchTerm);
         }
 
-        let textFilter = wixData.filter()
-            .contains("requestDonationDetails", searchValue)
-            .or(wixData.filter().contains("sizeDetails", searchValue))
-            .or(wixData.filter().contains("forWho", searchValue))
-            .or(wixData.filter().contains("staffNotes", searchValue));
+        // 3. DROPDOWN FILTERS (Operations)
+        let matchesOkini = true;
+        let matchesCoord = true;
 
-        if (matchingFamilyIds.length > 0) {
-            textFilter = textFilter.or(wixData.filter().hasSome("linkedFamily", matchingFamilyIds));
+        if (selectedOkini || selectedCoordinator) {
+            let matchingRequests = family.requests.filter((req) => {
+                let okiniMatch = selectedOkini ? req.whichOkini === selectedOkini : true;
+                let coordMatch = selectedCoordinator ? req.coordinator === selectedCoordinator : true;
+                return okiniMatch && coordMatch;
+            });
+            
+            if (selectedOkini) matchesOkini = matchingRequests.length > 0;
+            if (selectedCoordinator) matchesCoord = matchingRequests.length > 0;
         }
 
-        opsFilter = opsFilter.and(textFilter);
-    }
+        return matchesSearch && matchesOkini && matchesCoord;
+    });
 
-    // --- 4. EXECUTE FILTER ---
-    try {
-        await $w(DATASET_ID).setFilter(opsFilter);
-        console.log("Filters applied successfully.");
-    } catch (error) {
-        console.error("Failed to filter dataset:", error);
-    }
+    $w('#familyRepeater').data = filteredData;
 }
 
-/**
- * Queries the Donors collection to count unapproved items.
- */
-async function updateNewDonorCount() {
-    const countElement = $w('#text127'); 
-    try {
-        const count = await wixData.query(DONORS_COLLECTION_ID)
-            .ne(APPROVAL_FIELD_KEY, true)
-            .count();
-
-        countElement.text = count === 1 
-            ? "There is 1 donor pending approval" 
-            : `There are ${count} donors pending approval`;
-    } catch (error) {
-        console.error("Failed to count new donors:", error);
-        countElement.text = "Error loading donor count.";
-    }
+// ==========================================
+// RESET LOGIC
+// ==========================================
+function resetFilters() {
+    $w('#input1').value = "";
+    $w('#dropdown1').value = "";
+    $w('#dropdown2').value = "";
+    $w('#switch3').checked = false;
+    
+    // Re-apply filters with empty values to show all default data
+    applyFilters();
 }
+
+// ==========================================
+// BIND DATA TO REPEATER UI
+// ==========================================
+$w('#familyRepeater').onItemReady(($item, itemData) => {
+    
+    $item('#headOfFamily').text = itemData.headOfFamily || "Unnamed Family";
+    $item('#familyComposition').text = itemData.familyDescription || "No composition provided.";
+    $item('#familyStaffNotes').text = itemData.staffNotes || "No staff notes.";
+
+    let requestsHtml = "";
+    
+    if (itemData.requests && itemData.requests.length > 0) {
+        
+        let requestLines = itemData.requests.map((req, index) => {
+            let reqTitle = req.requestDonationDetails || "Untitled Request";
+            let forWho = req.forWho || "N/A";
+            let size = req.sizeDetails || "N/A";
+            let coord = req.coordinator || "Unassigned";
+            
+            let okiniIcon = (req.whichOkini === "Holiday" || req.whichOkini === "holiday") ? "🎄 Holiday" : "📦 Regular";
+            let websiteStatus = req.liveOnWebsite ? "☑️ Live" : "⬜ Draft";
+            
+            let urgentStatus = req.urgentNeedStatus 
+                ? "<span style='color:#8B0000; font-weight:bold;'>🚨 URGENT</span>" 
+                : "Normal";
+            
+            return `<b>Req ${index + 1}:</b> ${reqTitle}, For: ${forWho}, Size/Details: ${size}, Coord: ${coord}, ${okiniIcon}, Website: ${websiteStatus}, Need: ${urgentStatus}`;
+        });
+        
+        requestsHtml = requestLines.join("<br><br>");
+        
+    } else {
+        requestsHtml = "<i>No requests linked to this family yet.</i>";
+    }
+    
+    $item('#requestInfo').html = `<p style="font-size:15px; line-height:1.6em;">${requestsHtml}</p>`;
+
+    // EDIT BUTTON ROUTING
+    $item('#editFamily').onClick(() => {
+        wixLocation.to(`/newokinipost?familyId=${itemData._id}`); 
+    });
+});
