@@ -73,41 +73,62 @@ function applyFilters() {
     let selectedCoordinator = $w('#dropdown2').value;   
     let archiveMode = $w('#switch3').checked;           
 
-    let filteredData = allFamiliesWithRequests.filter((family) => {
+    let filteredData = [];
+
+    // Loop through our global array of families
+    for (let i = 0; i < allFamiliesWithRequests.length; i++) {
+        let family = allFamiliesWithRequests[i];
         
-        // 1. ARCHIVE MODE FILTER
-        let isArchived = family.status === "Archived";
-        let passesArchiveCheck = archiveMode ? isArchived : !isArchived;
+        // 1. FILTER THE NESTED REQUESTS
+        // We only want to look at requests that match the Archive mode & Dropdowns
+        let matchingRequests = family.requests.filter(
+            /** @param {any} req */
+            (req) => {
+            let isArchived = req.archive === true;
+            let archiveMatch = archiveMode ? isArchived : !isArchived;
+            let okiniMatch = selectedOkini ? req.whichOkini === selectedOkini : true;
+            let coordMatch = selectedCoordinator ? req.coordinator === selectedCoordinator : true;
+            
+            return archiveMatch && okiniMatch && coordMatch;
+        });
 
-        if (!passesArchiveCheck) return false;
-
-        // 2. SEARCH INPUT FILTER
+        // 2. SEARCH LOGIC (Checks Family AND Request details)
         let matchesSearch = true;
         if (searchTerm) {
             let headName = family.headOfFamily ? family.headOfFamily.toLowerCase() : "";
             let famId = family.familyId ? family.familyId.toLowerCase() : "";
-            matchesSearch = headName.includes(searchTerm) || famId.includes(searchTerm);
-        }
-
-        // 3. DROPDOWN FILTERS (Operations)
-        let matchesOkini = true;
-        let matchesCoord = true;
-
-        if (selectedOkini || selectedCoordinator) {
-            let matchingRequests = family.requests.filter(
-                /** @param {any} req */
-                (req) => {
-                let okiniMatch = selectedOkini ? req.whichOkini === selectedOkini : true;
-                let coordMatch = selectedCoordinator ? req.coordinator === selectedCoordinator : true;
-                return okiniMatch && coordMatch;
-            });
+            let phone = family.phone ? family.phone.toLowerCase() : "";
+            let email = family.email ? family.email.toLowerCase() : "";
             
-            if (selectedOkini) matchesOkini = matchingRequests.length > 0;
-            if (selectedCoordinator) matchesCoord = matchingRequests.length > 0;
+            let familyMatches = headName.includes(searchTerm) || famId.includes(searchTerm) || phone.includes(searchTerm) || email.includes(searchTerm);
+
+            let requestsMatch = matchingRequests.some((/** @type {any} */ req) => {
+                let reqTitle = req.requestDonationDetails ? req.requestDonationDetails.toLowerCase() : "";
+                let forWho = req.forWho ? req.forWho.toLowerCase() : "";
+                let notes = req.requestNotes ? req.requestNotes.toLowerCase() : "";
+                return reqTitle.includes(searchTerm) || forWho.includes(searchTerm) || notes.includes(searchTerm);
+            });
+
+            matchesSearch = familyMatches || requestsMatch;
         }
 
-        return matchesSearch && matchesOkini && matchesCoord;
-    });
+        // 3. VISIBILITY LOGIC
+        let hasMatchingRequests = matchingRequests.length > 0;
+        let passesFilters = true;
+        
+        // If they are explicitly filtering (dropdowns or archive), hide families that have 0 matching requests
+        if (selectedOkini || selectedCoordinator || archiveMode) {
+            passesFilters = hasMatchingRequests;
+        }
+
+        // 4. APPLY TO REPEATER
+        if (matchesSearch && passesFilters) {
+            // Shallow copy the family so we don't accidentally delete data from the global array
+            let familyCopy = Object.assign({}, family);
+            familyCopy.requests = matchingRequests; 
+            filteredData.push(familyCopy);
+        }
+    }
 
     $w('#familyRepeater').data = filteredData;
 }

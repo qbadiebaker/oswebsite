@@ -289,6 +289,25 @@ async function loadFamilyRequests() {
 function refreshRequestRepeater() {
     let isArchiveMode = $w('#switch5').checked;
     
+    // Calculate Request States for the dynamic label
+    let activeCount = 0;
+    let archiveCount = 0;
+    
+    familyRequests.forEach((/** @type {any} */ req) => {
+        if (req.archive === true) archiveCount++;
+        else activeCount++;
+    });
+
+    // Update the text6 label dynamically
+    if (familyRequests.length === 0) {
+        $w('#text6').text = "Linked Requests: None (create new one below)";
+    } else if (activeCount === 0 && archiveCount > 0) {
+        $w('#text6').text = "Linked Requests: No active requests (check archive ➔)";
+    } else {
+        $w('#text6').text = "Linked Requests";
+    }
+    
+    // Filter the repeater data based on the archive switch
     let filteredRequests = familyRequests.filter((/** @type {any} */ req) => {
         let isArchived = req.archive === true; 
         return isArchiveMode ? isArchived : !isArchived;
