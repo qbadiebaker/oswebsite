@@ -1,184 +1,390 @@
 import wixData from 'wix-data';
+import wixLocation from 'wix-location';
 
-let selectedFamily = null; 
+// ==========================================
+// GLOBAL STATE VARIABLES
+// ==========================================
+/** @type {any} */
+let currentFamily = null;
+/** @type {any} */
+let currentRequest = null; 
+/** @type {any[]} */
+let familyRequests = []; 
+let isEditingFamily = false;
+let isEditingRequest = false;
 
-$w.onReady(function () {
-
-    $w('#linkedFamilyRepeater').collapse(); 
+$w.onReady(async function () {
+    // Initial UI State
+    $w('#box281').collapse(); 
+    $w('#table1').collapse(); 
+    $w('#input15').collapse(); 
+    $w('#box248').collapse(); 
+    $w('#linkedRequestRepeater').collapse(); 
+    
+    // New Structural Boxes
+    $w('#box287').collapse();
+    $w('#box19').collapse();
 
     // ==========================================
-    // 1. DIRECT QUERY: SEARCH EXISTING FAMILIES (UPGRADED)
+    // URL AUTO-FILL (From Admin Page)
     // ==========================================
-    $w('#input3').onInput(async () => {
-        let keyword = $w('#input3').value;
+    let queryParams = wixLocation.query;
+    if (queryParams.familyId) {
+        try {
+            currentFamily = await wixData.get('Import4', queryParams.familyId);
+            if (currentFamily) {
+                isEditingFamily = true;
+                populateFamilyForm(currentFamily);
+                
+                $w('#box287').expand();
+                $w('#box19').expand();
+                $w('#box281').expand();
+                
+                await loadFamilyRequests();
+            }
+        } catch (err) {
+            console.error("Failed to load family from URL:", err);
+        }
+    }
+
+    // ==========================================
+    // SECTION 1: FAMILY MANAGEMENT
+    // ==========================================
+
+    $w('#button38').onClick(() => {
+        isEditingFamily = false;
+        currentFamily = null;
+        clearFamilyForm();
         
-        // Only search if they've typed at least 2 characters
+        $w('#table1').collapse();
+        $w('#input15').collapse();
+        
+        // Expand relevant boxes
+        $w('#box287').expand();
+        $w('#box19').expand();
+        $w('#box281').expand();
+        
+        familyRequests = [];
+        refreshRequestRepeater();
+    });
+
+    $w('#button39').onClick(() => {
+        $w('#box281').collapse();
+        
+        // Expand relevant boxes
+        $w('#box287').expand();
+        $w('#box19').expand();
+        
+        $w('#input15').expand();
+        $w('#table1').expand();
+        loadDefaultFamilies(); 
+    });
+
+    $w('#input15').onInput(async () => {
+        let keyword = $w('#input15').value;
         if (keyword.length > 1) {
             try {
-                let results = await wixData.query('Import4') // Families collection
+                let results = await wixData.query('Import4')
                     .contains('headOfFamily', keyword)
                     .or(wixData.query('Import4').contains('familyId', keyword))
-                    .or(wixData.query('Import4').contains('directionsPhysicalLocation', keyword))
-                    .or(wixData.query('Import4').contains('familyDescription', keyword))
-                    .or(wixData.query('Import4').contains('staffNotes', keyword))                    
+                    .or(wixData.query('Import4').contains('phone', keyword))
                     .or(wixData.query('Import4').contains('email', keyword))
-                    .or(wixData.query('Import4').contains('primaryMailingAddress', keyword))
-                    .limit(10) // Strictly limits the table to 10 rows
+                    .limit(10)
                     .find();
-                
-                $w('#familySearchTable').rows = results.items;
+                $w('#table1').rows = results.items;
             } catch (error) {
                 console.error("Search failed:", error);
             }
         } else {
-            // Load defaults when search is cleared
             loadDefaultFamilies();
         }
     });
 
-    // ==========================================
-    // 2. UI TOGGLES
-    // ==========================================
-    $w('#addExistingFamily').onClick(() => {
-        $w('#familySearchTable').expand();
-        $w('#box248').collapse(); 
+    $w('#table1').onRowSelect(async (event) => {
+        currentFamily = event.rowData;
+        isEditingFamily = true;
         
-        // Load default families as soon as the table opens
-        loadDefaultFamilies();
+        populateFamilyForm(currentFamily);
+        
+        $w('#table1').collapse();
+        $w('#input15').collapse();
+        $w('#box281').expand();
+
+        await loadFamilyRequests();
     });
 
-    $w('#addNewFamily').onClick(() => {
-        $w('#box248').expand();
-        $w('#familySearchTable').collapse(); 
-    });
+    $w('#button37').onClick(async () => {
+        $w('#button37').disable();
+        $w('#button37').label = "Saving...";
 
-    // ==========================================
-    // 3. LINK EXISTING / REMOVE LINK
-    // ==========================================
-    $w('#familySearchTable').onRowSelect((event) => {
-        selectedFamily = event.rowData; 
-        updateRepeaterUI();
-        $w('#familySearchTable').collapse(); 
-    });
-
-    $w('#removeLinkedFamilyButton').onClick(() => {
-        selectedFamily = null;
-        updateRepeaterUI();
-    });
-
-    // ==========================================
-    // 4. SAVE & LINK A NEW FAMILY
-    // ==========================================
-    $w('#saveButton').onClick(async () => {
-        let newFamId = "idfam-" + Date.now();
-
-        let newFamilyData = {
-            familyId: newFamId, 
-            headOfFamily: $w('#headOffamilyInput').value, 
-            familyDescription: $w('#familyDescriptionInput').value,
-            staffNotes: $w('#staffNotes').value,
-            primaryMailingAddress: $w('#primaryMailingAddressInput').value,
-            phone: $w('#phone').value,
-            directionsPhysicalLocation: $w('#directionsOrPhysAddress').value,
-            email: $w('#email').value
-        };
+        /** @type {any} */
+        let familyData = getFamilyFormData();
 
         try {
-            let insertedFamily = await wixData.insert('Import4', newFamilyData); 
-            selectedFamily = insertedFamily; 
-            updateRepeaterUI();
-            $w('#box248').collapse(); 
+            if (isEditingFamily && currentFamily) {
+                familyData._id = currentFamily._id;
+                familyData.familyId = currentFamily.familyId;
+                currentFamily = await wixData.update('Import4', familyData);
+            } else {
+                familyData.familyId = "idfam-" + Date.now();
+                currentFamily = await wixData.insert('Import4', familyData);
+                isEditingFamily = true; 
+            }
+            $w('#button37').label = "Saved!";
+            setTimeout(() => { $w('#button37').label = "Save Family"; $w('#button37').enable(); }, 2000);
         } catch (error) {
-            console.error("Failed to create new family:", error);
+            console.error("Failed to save family:", error);
+            $w('#button37').label = "Error";
+            $w('#button37').enable();
         }
     });
 
     // ==========================================
-    // 5. FINAL SAVE: MULTI-REFERENCE LINKING & CONFIRMATION
+    // SECTION 2: REQUEST MANAGEMENT
     // ==========================================
-    $w('#button28').onClick(async () => {
-        if (!$w('#input2').value) return console.error("Req title is required");
 
-        // Change button state to indicate processing
+    $w('#switch5').onChange(() => {
+        refreshRequestRepeater();
+    });
+
+    $w('#addNewRequest').onClick(() => {
+        if (!currentFamily) return console.warn("Must save or select a family first!");
+        isEditingRequest = false;
+        currentRequest = null;
+        clearRequestForm();
+        $w('#box248').expand();
+    });
+
+    $w('#button28').onClick(async () => {
+        if (!currentFamily) return console.error("No family selected.");
+        if (!$w('#input14').value) return console.error("Req title is required");
+
         $w('#button28').disable();
         $w('#button28').label = "Saving...";
 
-        // Formats exactly to YYYY-MM-DD (Requires field type to be 'Text' in CMS)
-        let dateString = new Date().toISOString().split('T')[0];
-
-        let newOpId = "OP-" + Date.now();
-
-        let newOperationData = {
-            operationId: newOpId, 
-            requestDonationDetails: $w('#input2').value, 
-            forWho: $w('#input5').value,                 
-            requestNotes: $w('#input1').value,           
-            operationType: "Request",                    
-            dateRequested: dateString, 
-            whichOkini: $w('#dropdown1').value,
-            coordinator: $w('#dropdown2').value,
-            liveOnWebsite: $w('#switch1').checked, 
-            urgentNeedStatus: $w('#urgentNeedStatus').checked 
-        };
+        /** @type {any} */
+        let reqData = getRequestFormData();
 
         try {
-            // 1. Insert the Operation first
-            let insertedOp = await wixData.insert('Import3', newOperationData);
-            
-            // 2. Insert the Multi-Reference Link (if a family is selected)
-            if (selectedFamily) {
-                await wixData.insertReference('Import3', 'linkedFamily', insertedOp._id, selectedFamily._id);
+            if (isEditingRequest && currentRequest) {
+                reqData._id = currentRequest._id;
+                reqData.operationId = currentRequest.operationId;
+                
+                let updatedReq = await wixData.update('Import3', reqData);
+                await wixData.replaceReferences('Import3', 'linkedFamily', updatedReq._id, [currentFamily._id]);
+                
+                // INSTANT UI FIX: Update local array directly
+                let index = familyRequests.findIndex(r => r._id === updatedReq._id);
+                if (index !== -1) familyRequests[index] = updatedReq;
+
+            } else {
+                reqData.operationId = "OP-" + Date.now();
+                let insertedReq = await wixData.insert('Import3', reqData);
+                await wixData.insertReference('Import3', 'linkedFamily', insertedReq._id, currentFamily._id);
+                
+                // INSTANT UI FIX: Add new item to top of local array
+                familyRequests.unshift(insertedReq);
             }
 
-            console.log("Operation successfully created and linked!");
+            $w('#button28').label = "Saved!";
+            setTimeout(() => { $w('#button28').label = "Save Request"; $w('#button28').enable(); }, 2000);
             
-            // Update button to show success
-            $w('#button28').label = "Saved Successfully!";
+            $w('#box248').collapse();
             
-            // Optional: Re-enable the button after 3 seconds if they want to make another request
-            // setTimeout(() => {
-            //     $w('#button28').label = "Save Request";
-            //     $w('#button28').enable();
-            //     // Add code here to clear inputs if you want a clean slate
-            // }, 3000);
+            // Clear repeater data to force a UI redraw, then refresh
+            $w('#linkedRequestRepeater').data = [];
+            refreshRequestRepeater(); 
 
         } catch (error) {
-            console.error("Failed to create Operation:", error);
-            $w('#button28').label = "Error saving";
+            console.error("Failed to save request:", error);
+            $w('#button28').label = "Error";
             $w('#button28').enable();
         }
     });
 
     // ==========================================
-    // HELPER FUNCTIONS
+    // REPEATER LOGIC
     // ==========================================
-    function updateRepeaterUI() {
-        if (selectedFamily) {
-            $w('#linkedFamilyRepeater').data = [selectedFamily]; 
-            $w('#linkedFamilyRepeater').expand();
-        } else {
-            $w('#linkedFamilyRepeater').data = [];
-            $w('#linkedFamilyRepeater').collapse();
-        }
-    }
+    $w('#linkedRequestRepeater').onItemReady(($item, itemData) => {
+        let isArchiveMode = $w('#switch5').checked;
 
-    $w('#linkedFamilyRepeater').onItemReady(($item, itemData) => {
-        $item('#linkedFamilyHead').text = itemData.headOfFamily || "N/A";
-        $item('#linkedFamilyStaffNotes').text = itemData.staffNotes || "No staff notes available.";
-        $item('#linkedFamilyComposition').text = itemData.familyDescription || "N/A";
+        $item('#text13').text = isArchiveMode ? "DELETE" : "ARCHIVE";
+        
+        $item('#archiveButton').onClick(async () => {
+            try {
+                if (isArchiveMode) {
+                    await wixData.remove('Import3', itemData._id);
+                    familyRequests = familyRequests.filter(r => r._id !== itemData._id);
+                } else {
+                    itemData.archive = true; 
+                    await wixData.update('Import3', itemData);
+                    let index = familyRequests.findIndex(r => r._id === itemData._id);
+                    if (index !== -1) familyRequests[index] = itemData;
+                }
+                $w('#linkedRequestRepeater').data = [];
+                refreshRequestRepeater(); 
+            } catch (err) {
+                console.error("Action failed:", err);
+            }
+        });
+
+        $item('#button40').onClick(() => {
+            isEditingRequest = true;
+            currentRequest = itemData;
+            populateRequestForm(itemData);
+            $w('#box248').expand();
+        });
+
+        // UPDATED HTML FORMATTING WITH DATE
+        let reqTitle = itemData.requestDonationDetails || "Untitled Request";
+        let forWho = itemData.forWho || "N/A";
+        let details = itemData.requestNotes || "N/A"; 
+        let coord = itemData.coordinator || "Unassigned";
+        
+        let okiniIcon = (itemData.whichOkini === "Holiday" || itemData.whichOkini === "holiday") ? "🎄 Holiday" : "📦 Regular";
+        let websiteStatus = itemData.liveOnWebsite ? "✅ Posted" : "🟧 Not posted";
+        
+        let urgentStatus = itemData.urgentNeedStatus 
+            ? "<span style='color:#8B0000; font-weight:bold;'>🚨 URGENT</span>" 
+            : "Normal";
+            
+        let archiveStatus = itemData.archive ? "🗃️ Archived" : "📂 Active";
+
+        // Format the creation date nicely
+        let createdString = "Unknown";
+        if (itemData._createdDate) {
+            let dateObj = new Date(itemData._createdDate);
+            createdString = dateObj.toLocaleDateString() + " " + dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }
+
+        let htmlString = `<div style="font-size:15px; line-height:1.6em; margin-bottom: 5px;">
+                            <b>${reqTitle}</b> <br>
+                            <span style="margin-left: 15px;"><b>For:</b> ${forWho} &nbsp;|&nbsp; <b>Details:</b> ${details}</span><br>
+                            <span style="margin-left: 15px;"><b>Coord:</b> ${coord} &nbsp;|&nbsp; ${okiniIcon} &nbsp;|&nbsp; ${websiteStatus} &nbsp;|&nbsp; <b>Need:</b> ${urgentStatus} &nbsp;|&nbsp; <b>Status:</b> ${archiveStatus}</span><br>
+                            <span style="margin-left: 15px; font-size: 13px; color: #777;"><b>Created:</b> ${createdString}</span>
+                          </div>`;
+                          
+        $item('#requestInfo').html = htmlString;
+    });
+});
+
+// ==========================================
+// DATA FETCHING HELPERS
+// ==========================================
+async function loadFamilyRequests() {
+    if (!currentFamily) return;
+    try {
+        let res = await wixData.query('Import3')
+            .hasSome('linkedFamily', [currentFamily._id])
+            .descending('_createdDate')
+            .find();
+        
+        familyRequests = res.items;
+        refreshRequestRepeater();
+    } catch (err) {
+        console.error("Failed to load requests:", err);
+    }
+}
+
+function refreshRequestRepeater() {
+    let isArchiveMode = $w('#switch5').checked;
+    
+    let filteredRequests = familyRequests.filter((/** @type {any} */ req) => {
+        let isArchived = req.archive === true; 
+        return isArchiveMode ? isArchived : !isArchived;
     });
 
-    // Fetches the 10 most recently added families to populate the default table
-    async function loadDefaultFamilies() {
-        try {
-            let defaultResults = await wixData.query('Import4')
-                .descending('_createdDate') // Sorts to show the newest families first
-                .limit(10)
-                .find();
-            
-            $w('#familySearchTable').rows = defaultResults.items;
-        } catch (error) {
-            console.error("Failed to load default families", error);
-        }
+    $w('#linkedRequestRepeater').data = filteredRequests;
+
+    if (filteredRequests.length > 0) {
+        $w('#linkedRequestRepeater').expand();
+    } else {
+        $w('#linkedRequestRepeater').collapse();
     }
-});
+}
+
+async function loadDefaultFamilies() {
+    try {
+        let res = await wixData.query('Import4').descending('_createdDate').limit(10).find();
+        $w('#table1').rows = res.items;
+    } catch (error) {
+        console.error("Default families load failed", error);
+    }
+}
+
+// ==========================================
+// FORM DATA HANDLERS
+// ==========================================
+
+function clearFamilyForm() {
+    $w('#input10').value = ""; 
+    $w('#textBox2').value = ""; 
+    $w('#textBox1').value = ""; 
+    $w('#input9').value = ""; 
+    $w('#input8').value = ""; 
+    $w('#input7').value = ""; 
+    $w('#input6').value = ""; 
+}
+
+/** @param {any} data */
+function populateFamilyForm(data) {
+    $w('#input10').value = data.headOfFamily || "";
+    $w('#textBox2').value = data.familyDescription || "";
+    $w('#textBox1').value = data.staffNotes || "";
+    $w('#input9').value = data.primaryMailingAddress || "";
+    $w('#input8').value = data.phone || "";
+    $w('#input7').value = data.directionsPhysicalLocation || "";
+    $w('#input6').value = data.email || "";
+}
+
+function getFamilyFormData() {
+    return {
+        headOfFamily: $w('#input10').value, 
+        familyDescription: $w('#textBox2').value,
+        staffNotes: $w('#textBox1').value,
+        primaryMailingAddress: $w('#input9').value,
+        phone: $w('#input8').value,
+        directionsPhysicalLocation: $w('#input7').value,
+        email: $w('#input6').value
+    };
+}
+
+function clearRequestForm() {
+    $w('#input14').value = ""; 
+    $w('#input13').value = ""; 
+    $w('#input12').value = ""; 
+    $w('#dropdown4').value = ""; 
+    $w('#dropdown3').value = ""; 
+    $w('#checkbox1').checked = false; 
+    $w('#switch2').checked = false; 
+    $w('#switch3').checked = false; 
+}
+
+/** @param {any} data */
+function populateRequestForm(data) {
+    $w('#input14').value = data.requestDonationDetails || "";
+    $w('#input13').value = data.forWho || "";
+    $w('#input12').value = data.requestNotes || "";
+    $w('#dropdown4').value = data.coordinator || "";
+    $w('#dropdown3').value = data.whichOkini || "";
+    $w('#checkbox1').checked = data.urgentNeedStatus || false;
+    $w('#switch2').checked = data.liveOnWebsite || false;
+    $w('#switch3').checked = data.archive || false; 
+}
+
+function getRequestFormData() {
+    let dateString = new Date().toISOString().split('T')[0];
+
+    return {
+        requestDonationDetails: $w('#input14').value, 
+        forWho: $w('#input13').value,                 
+        requestNotes: $w('#input12').value,           
+        operationType: "Request",                    
+        dateRequested: dateString, 
+        whichOkini: $w('#dropdown3').value,
+        coordinator: $w('#dropdown4').value,
+        liveOnWebsite: $w('#switch2').checked, 
+        urgentNeedStatus: $w('#checkbox1').checked,
+        archive: $w('#switch3').checked 
+    };
+}
