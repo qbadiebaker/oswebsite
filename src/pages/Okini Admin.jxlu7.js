@@ -3,82 +3,87 @@ import wixLocation from 'wix-location';
 
 /** @type {any[]} */
 let allFamiliesWithRequests = []; 
+let isRepeaterBound = false; // Prevents stacking listeners on page return
 
 $w.onReady(async function () {
-    // 1. FORCE CACHE CLEAR
+    // Force complete cache clear on page load/return
     allFamiliesWithRequests = [];
-    $w('#familyRepeater').data = [];
     $w('#familyRepeater').collapse();
+    $w('#familyRepeater').data = [];
     
-    // 2. BIND REPEATER LOGIC (Must be inside onReady!)
-    $w('#familyRepeater').onItemReady(($item, itemData) => {
-        $item('#headOfFamily').text = itemData.headOfFamily || "Unnamed Family";
-        $item('#familyComposition').text = itemData.familyDescription || "No composition provided.";
-        $item('#familyStaffNotes').text = itemData.staffNotes || "No staff notes.";
-
-        let requestsHtml = "";
-        let requestsToDisplay = itemData.filteredRequests || [];
-        let archiveMode = $w('#switch3').checked;
-        
-        let archiveCount = (itemData.totalRequests || []).filter((/** @type {any} */ r) => r.archive === true).length;
-        
-        if (requestsToDisplay.length > 0) {
-            let requestLines = requestsToDisplay.map(
-                /** 
-                 * @param {any} req 
-                 * @param {number} index 
-                 */
-                (req, index) => {
-                let reqTitle = req.requestDonationDetails || "Untitled Request";
-                let forWho = req.forWho || "N/A";
-                let details = req.requestNotes || "N/A"; 
-                let coord = req.coordinator || "Unassigned";
-                let reqStaffNotes = req.staffNotes || "None"; 
-                
-                let okiniIcon = (req.whichOkini === "Holiday" || req.whichOkini === "holiday") ? "🎄 Holiday" : "📦 Regular";
-                let websiteStatus = req.liveOnWebsite ? "✅ Posted" : "🟧 Not posted";
-                let archiveStatus = req.archive ? "🗃️ Archived" : "📂 Active";
-
-                let createdString = "Unknown";
-                if (req._createdDate) {
-                    let dateObj = new Date(req._createdDate);
-                    createdString = dateObj.toLocaleDateString() + " " + dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                }
-                
-                return `<div style="margin-bottom: 10px;">
-                            <b>Req ${index + 1}:</b> ${reqTitle} <br>
-                            <span style="margin-left: 15px;"><b>For:</b> ${forWho} &nbsp;|&nbsp; <b>Details:</b> ${details}</span><br>
-                            <span style="margin-left: 15px;"><b>Coord:</b> ${coord} &nbsp;|&nbsp; ${okiniIcon} &nbsp;|&nbsp; ${websiteStatus} &nbsp;|&nbsp; <b>Status:</b> ${archiveStatus}</span><br>
-                            <span style="margin-left: 15px;"><b>Staff Notes:</b> ${reqStaffNotes}</span><br>
-                            <span style="margin-left: 15px; font-size: 13px; color: #777;"><b>Created:</b> ${createdString}</span>
-                        </div>`;
-            });
+    // Bind the repeater ONLY ONCE
+    if (!isRepeaterBound) {
+        $w('#familyRepeater').onItemReady(($item, itemData) => {
             
-            requestsHtml = requestLines.join("<hr style='border: 0; border-top: 1px dashed #ccc; margin: 15px 0;'>");
+            $item('#headOfFamily').text = itemData.headOfFamily || "Unnamed Family";
+            $item('#familyComposition').text = itemData.familyDescription || "No composition provided.";
+            $item('#familyStaffNotes').text = itemData.staffNotes || "No staff notes.";
+
+            let requestsHtml = "";
+            let requestsToDisplay = itemData.filteredRequests || [];
+            let archiveMode = $w('#switch3').checked === true;
             
-        } else {
-            if (archiveMode) {
-                requestsHtml = "<i style='color: #777;'>No archived requests.</i>";
+            let archiveCount = (itemData.totalRequests || []).filter((/** @type {any} */ r) => r.archive === true).length;
+            
+            if (requestsToDisplay.length > 0) {
+                let requestLines = requestsToDisplay.map(
+                    /** 
+                     * @param {any} req 
+                     * @param {number} index 
+                     */
+                    (req, index) => {
+                    let reqTitle = req.requestDonationDetails || "Untitled Request";
+                    let forWho = req.forWho || "N/A";
+                    let details = req.requestNotes || "N/A"; 
+                    let coord = req.coordinator || "Unassigned";
+                    let reqStaffNotes = req.staffNotes || "None"; 
+                    
+                    let okiniIcon = (req.whichOkini === "Holiday" || req.whichOkini === "holiday") ? "🎄 Holiday" : "📦 Regular";
+                    let websiteStatus = req.liveOnWebsite ? "✅ Posted" : "🟧 Not posted";
+                    let archiveStatus = req.archive ? "🗃️ Archived" : "📂 Active";
+
+                    let createdString = "Unknown";
+                    if (req._createdDate) {
+                        let dateObj = new Date(req._createdDate);
+                        createdString = dateObj.toLocaleDateString() + " " + dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                    }
+                    
+                    return `<div style="margin-bottom: 10px;">
+                                <b>Req ${index + 1}:</b> ${reqTitle} <br>
+                                <span style="margin-left: 15px;"><b>For:</b> ${forWho} &nbsp;|&nbsp; <b>Details:</b> ${details}</span><br>
+                                <span style="margin-left: 15px;"><b>Coord:</b> ${coord} &nbsp;|&nbsp; ${okiniIcon} &nbsp;|&nbsp; ${websiteStatus} &nbsp;|&nbsp; <b>Status:</b> ${archiveStatus}</span><br>
+                                <span style="margin-left: 15px;"><b>Staff Notes:</b> ${reqStaffNotes}</span><br>
+                                <span style="margin-left: 15px; font-size: 13px; color: #777;"><b>Created:</b> ${createdString}</span>
+                            </div>`;
+                });
+                
+                requestsHtml = requestLines.join("<hr style='border: 0; border-top: 1px dashed #ccc; margin: 15px 0;'>");
+                
             } else {
-                if (archiveCount > 0) {
-                    requestsHtml = `<i style='color: #777;'>No active requests. This family has ${archiveCount} archived request(s). Check the archive filter to view them.</i>`;
+                if (archiveMode) {
+                    requestsHtml = "<i style='color: #777;'>No archived requests.</i>";
                 } else {
-                    requestsHtml = "<i style='color: #777;'>No requests linked to this family yet.</i>";
+                    if (archiveCount > 0) {
+                        requestsHtml = `<i style='color: #777;'>No active requests. This family has ${archiveCount} archived request(s). Check the archive filter to view them.</i>`;
+                    } else {
+                        requestsHtml = "<i style='color: #777;'>No requests linked to this family yet.</i>";
+                    }
                 }
             }
-        }
-        
-        $item('#requestInfo').html = `<div style="font-size:15px; line-height:1.8em;">${requestsHtml}</div>`;
+            
+            $item('#requestInfo').html = `<div style="font-size:15px; line-height:1.8em;">${requestsHtml}</div>`;
 
-        $item('#editFamily').onClick(() => {
-            wixLocation.to(`/newokinipost?familyId=${itemData._id}`); 
+            $item('#editFamily').onClick(() => {
+                // We use the 'originalId' we saved so the New Post page knows which family to load
+                wixLocation.to(`/newokinipost?familyId=${itemData.originalId}`); 
+            });
         });
-    });
+        
+        isRepeaterBound = true;
+    }
 
-    // 3. LOAD DATA
     await loadAdminData();
 
-    // 4. EVENT LISTENERS
     $w('#button28').onClick(() => applyFilters());
     $w('#dropdown1').onChange(() => applyFilters());
     $w('#dropdown2').onChange(() => applyFilters());
@@ -86,9 +91,6 @@ $w.onReady(async function () {
     $w('#resetButton').onClick(() => resetFilters());
 });
 
-// ==========================================
-// HELPER FUNCTIONS (Safe to be outside)
-// ==========================================
 async function loadAdminData() {
     try {
         let familyResults = await wixData.query('Import4').limit(150).find();
@@ -167,12 +169,19 @@ function applyFilters() {
         }
 
         if (matchesSearch && passesFilters) {
-            let familyCopy = { ...family, filteredRequests: matchingRequests, totalRequests: allReqs };
+            let familyCopy = { 
+                ...family, 
+                originalId: family._id, // Save the real database ID for the edit button
+                _id: family._id + "_" + Math.random().toString(36).substr(2, 9), // MAGIC FIX: Force a fresh redraw!
+                filteredRequests: matchingRequests, 
+                totalRequests: allReqs 
+            };
             filteredData.push(familyCopy);
         }
     }
 
-    $w('#familyRepeater').data = filteredData;
+    $w('#familyRepeater').data = []; // Clear the old cache
+    $w('#familyRepeater').data = filteredData; // Inject the fresh data
 }
 
 function resetFilters() {
