@@ -171,8 +171,8 @@ function applyFilters() {
         if (matchesSearch && passesFilters) {
             let familyCopy = { 
                 ...family, 
-                originalId: family._id, // Save the real database ID for the edit button
-                _id: family._id + "_" + Math.random().toString(36).substr(2, 9), // MAGIC FIX: Force a fresh redraw!
+                originalId: family._id, 
+                _id: family._id, // FIX: Use the stable database ID to prevent SSR crashes
                 filteredRequests: matchingRequests, 
                 totalRequests: allReqs 
             };

@@ -19,7 +19,15 @@ $w.onReady(async function () {
     $w('#linkedRequestRepeater').collapse(); 
     $w('#box287').collapse();
     $w('#box19').collapse();
-
+    // ==========================================
+    // RETURN TO ADMIN (Cache-Busting Navigation)
+    // ==========================================
+    $w('#button22').onClick(() => {
+        // The Date.now() query parameter forces Wix to treat this as a brand new page visit, 
+        // completely avoiding the "same name" repeater cache glitch.
+        // NOTE: Make sure "/okiniadmin" is your exact Admin page URL slug!
+        wixLocation.to(`/okiniadmin?refresh=${Date.now()}`);
+    });
     // 2. BIND REPEATER LOGIC (Must be inside onReady)
     $w('#linkedRequestRepeater').onItemReady(($item, itemData) => {
         let isArchiveMode = $w('#switch5').checked;
