@@ -16,54 +16,9 @@ $w.onReady(async function () {
          * @param {any} itemData 
          */
         ($item, itemData) => {
-        
-        // Extract Public Family Info
-        let headName = itemData.headOfFamily || "Unnamed Family";
-        let familyDesc = itemData.familyDescription || "No family description provided.";
-
-        let requestsHtml = "";
-        let requestsToDisplay = itemData.filteredRequests || [];
-        
-        if (requestsToDisplay.length > 0) {
-            let requestLines = requestsToDisplay.map(
-                /** 
-                 * @param {any} req 
-                 * @param {number} index 
-                 */
-                (req, index) => {
-                
-                // Public Request Info Only
-                let reqTitle = req.requestDonationDetails || "Untitled Request";
-                let forWho = req.forWho || "N/A";
-                let details = req.requestNotes || "N/A"; 
-                
-                // Formatted specifically for donors (clean, no admin metadata)
-                return `<div style="margin-bottom: 10px;">
-                            <b style="font-size: 16px; color: #222;">${reqTitle}</b> <br>
-                            <span style="margin-left: 15px;"><b>For:</b> ${forWho}</span><br>
-                            <span style="margin-left: 15px;"><b>Details:</b> ${details}</span>
-                        </div>`;
-            });
-            
-            requestsHtml = requestLines.join("<hr style='border: 0; border-top: 1px dashed #ccc; margin: 15px 0;'>");
-        } else {
-            requestsHtml = "<i style='color: #777; margin-left: 15px;'>This family currently has no active requests.</i>";
+            renderFamilyCard($item, itemData);
         }
-        
-        // Combine Family Info AND Requests into the single text box
-        let finalHtml = `
-            <div style="margin-bottom: 12px;">
-                <h3 style="font-size: 20px; margin: 0; color: #111;">${headName}</h3>
-                <span style="font-size: 15px; font-style: italic; color: #555;">${familyDesc}</span>
-            </div>
-            <div style="font-size: 15px; line-height: 1.8em;">
-                <b style="font-size: 14px; color: #777; text-transform: uppercase;">Active Requests:</b><br>
-                ${requestsHtml}
-            </div>
-        `;
-        
-        $item('#familyRequestInfo').html = finalHtml;
-    });
+    );
 
     // 3. LOAD DATA
     await loadPublicData();
@@ -74,8 +29,62 @@ $w.onReady(async function () {
     $w('#dropdown1').onChange(() => applyFiltersAndSort());
 });
 
+/**
+ * Renders the Family & Request HTML inside a repeater item
+ * @param {any} $item 
+ * @param {any} itemData 
+ */
+function renderFamilyCard($item, itemData) {
+    // Extract Public Family Info
+    let headName = itemData.headOfFamily || "Unnamed Family";
+    let familyDesc = itemData.familyDescription || "No family description provided.";
+
+    let requestsHtml = "";
+    let requestsToDisplay = itemData.filteredRequests || [];
+    
+    if (requestsToDisplay.length > 0) {
+        let requestLines = requestsToDisplay.map(
+            /** 
+             * @param {any} req 
+             * @param {number} index 
+             */
+            (req, index) => {
+            
+            // Public Request Info Only
+            let reqTitle = req.requestDonationDetails || "Untitled Request";
+            let forWho = req.forWho || "N/A";
+            let details = req.requestNotes || "N/A"; 
+            
+            // Formatted specifically for donors (clean, no admin metadata)
+            return `<div style="margin-bottom: 10px;">
+                        <b style="font-size: 16px; color: #222;">${reqTitle}</b> <br>
+                        <span style="margin-left: 15px;"><b>For:</b> ${forWho}</span><br>
+                        <span style="margin-left: 15px;"><b>Details:</b> ${details}</span>
+                    </div>`;
+        });
+        
+        requestsHtml = requestLines.join("<hr style='border: 0; border-top: 1px dashed #ccc; margin: 15px 0;'>");
+    } else {
+        requestsHtml = "<i style='color: #777; margin-left: 15px;'>This family currently has no active requests.</i>";
+    }
+    
+    // Combine Family Info AND Requests into the single text box
+    let finalHtml = `
+        <div style="margin-bottom: 12px;">
+            <h3 style="font-size: 20px; margin: 0; color: #111;">${headName}</h3>
+            <span style="font-size: 15px; font-style: italic; color: #555;">${familyDesc}</span>
+        </div>
+        <div style="font-size: 15px; line-height: 1.8em;">
+            <b style="font-size: 14px; color: #777; text-transform: uppercase;">Active Requests:</b><br>
+            ${requestsHtml}
+        </div>
+    `;
+    
+    $item('#familyRequestInfo').html = finalHtml;
+}
+
 // ==========================================
-// DATA FETCHING (WITH PRIVACY FIREWALL)
+// DATA FETCHING (WITH PRIVACY FIREWALL - REGULAR OKINI ONLY)
 // ==========================================
 async function loadPublicData() {
     try {
@@ -84,14 +93,20 @@ async function loadPublicData() {
 
         publicFamiliesWithRequests = await Promise.all(families.map(async (family) => {
             
-            // SECURITY: Only fetch requests that are Live and NOT Archived
+            // SECURITY: Only fetch requests that are Live, NOT Archived, and ARE Regular
+            // Uses the exact same .contains() method that works on your Holiday Okini page
             let reqResults = await wixData.query('Import3')
                 .hasSome('linkedFamily', [family._id])
                 .eq('liveOnWebsite', true) 
-                .ne('archive', true)       
+                .ne('archive', true)
+                .contains('whichOkini', 'regular')
                 .find();
             
-            let requests = reqResults.items;
+            // Secondary strict filter: only keep items where whichOkini is 'regular' (and never 'holiday')
+            let requests = reqResults.items.filter((/** @type {any} */ req) => {
+                let type = req.whichOkini ? String(req.whichOkini).trim().toLowerCase() : "";
+                return type === "regular";
+            });
             
             family.requests = requests;
             
@@ -112,7 +127,7 @@ async function loadPublicData() {
         $w('#repeater1').expand();
 
     } catch (error) {
-        console.error("Error loading public data:", error);
+        console.error("Error loading public regular data:", error);
     }
 }
 
@@ -129,7 +144,7 @@ function applyFiltersAndSort() {
         let family = publicFamiliesWithRequests[i];
         let matchingRequests = family.requests || [];
         
-        // UX DECISION: Hide families entirely if they have no active/public requests
+        // UX DECISION: Hide families entirely if they have no active/public REGULAR requests
         if (matchingRequests.length === 0) continue; 
 
         // SEARCH LOGIC (Strictly limited to 5 specific fields)
@@ -163,7 +178,7 @@ function applyFiltersAndSort() {
 
             let familyCopy = { 
                 ...family, 
-                _id: family._id, 
+                _id: `${family._id}-regular-${sortedReqs.length}`, // Forces Wix Repeater to bust any old cached item HTML
                 filteredRequests: sortedReqs 
             };
             filteredData.push(familyCopy);
@@ -180,4 +195,9 @@ function applyFiltersAndSort() {
 
     $w('#repeater1').data = []; // Clear cache
     $w('#repeater1').data = filteredData;
+
+    // Force every visible repeater item to refresh its HTML
+    $w('#repeater1').forEachItem(($item, itemData) => {
+        renderFamilyCard($item, itemData);
+    });
 }
